@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # Kết nối Database (Local hoặc Atlas)
-MONGO_URL = "mongodb://localhost:27017"
+MONGO_URL = "mongodb+srv://admin:<db_password>@khang.8uvqzff.mongodb.net/?appName=khang"
 client = AsyncIOMotorClient(MONGO_URL)
 db = client["chat_db"]
 messages_collection = db["messages"]
