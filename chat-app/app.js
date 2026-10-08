@@ -1,140 +1,126 @@
-// --- CẤU HÌNH ĐƯỜNG DẪN BACKEND ---
-// Tự động nhận diện chạy máy local hay trên web
-const IS_LOCAL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+const API_URL = "http://127.0.0.1:8000/api";
+const WS_URL = "ws://127.0.0.1:8000/ws";
 
-// --- CẤU HÌNH ĐƯỜNG DẪN BACKEND LOCAL ---
-const API_BASE_URL = "http://127.0.0.1:8000";
-const WS_BASE_URL  = "ws://127.0.0.1:8000/ws";
-// --- QUẢN LÝ TRẠNG THÁI ---
 let socket = null;
-let currentUser = null;
+let currentUsername = "";
+let currentRoom = "";
 
-// --- LẤY CÁC THÀNH PHẦN DOM ---
+// DOM Elements
 const loginScreen = document.getElementById("login-screen");
 const chatScreen = document.getElementById("chat-screen");
 const usernameInput = document.getElementById("username-input");
+const roomSelect = document.getElementById("room-select");
 const loginBtn = document.getElementById("login-btn");
-const userDisplay = document.getElementById("user-display");
+const logoutBtn = document.getElementById("logout-btn");
 
-const messagesBox = document.getElementById("messages-box");
+const roomTitle = document.getElementById("room-title");
+const userInfo = document.getElementById("user-info");
+const messagesContainer = document.getElementById("messages-container");
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
 
-// 1. BƯỚC ĐĂNG NHẬP
+const userCount = document.getElementById("user-count");
+const usersList = document.getElementById("users-list");
+
+// 1. ĐĂNG NHẬP
 loginBtn.addEventListener("click", async () => {
     const username = usernameInput.value.trim();
-    if (!username) {
-        alert("Vui lòng nhập tên tài khoản!");
-        return;
-    }
+    const room = roomSelect.value;
 
-    try {
-        // Gửi API Đăng nhập sang Backend FastAPI (Thành viên 1)
-        const response = await fetch(`${API_BASE_URL}/api/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: username })
-        });
+    if (!username) return alert("Vui lòng nhập tên!");
 
-        if (response.ok) {
-            const data = await response.json();
-            currentUser = data.username || username;
+    currentUsername = username;
+    currentRoom = room;
+
+    // Gọi API Login
+    await fetch(`${API_URL}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username })
+    });
+
+    // Chuyển giao diện
+    loginScreen.classList.add("hidden");
+    chatScreen.classList.remove("hidden");
+    roomTitle.innerText = `Phòng: ${roomSelect.options[roomSelect.selectedIndex].text}`;
+    userInfo.innerText = `Tài khoản: ${username}`;
+
+    // Tải lịch sử & Đăng ký WebSocket
+    await loadHistory(room);
+    connectWebSocket(room, username);
+});
+
+// 2. LOAD LỊCH SỬ TIN NHẮN
+async function loadHistory(room) {
+    messagesContainer.innerHTML = "";
+    const res = await fetch(`${API_URL}/messages/${room}`);
+    const history = await res.json();
+    history.forEach(msg => renderMessage(msg));
+    scrollToBottom();
+}
+
+// 3. KẾT NỐI WEBSOCKET
+function connectWebSocket(room, username) {
+    socket = new WebSocket(`${WS_URL}/${room}/${username}`);
+
+    socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === "user_list") {
+            updateUserList(data.users);
         } else {
-            // Mẹo: Nếu Backend chưa dựng kịp API, tạm thời cho đăng nhập giả lập để test UI
-            console.warn("Backend API chưa sẵn sàng, dùng giả lập username.");
-            currentUser = username;
+            renderMessage(data);
+            scrollToBottom();
         }
-
-        // Chuyển màn hình UI
-        userDisplay.textContent = `@${currentUser}`;
-        loginScreen.classList.add("hidden");
-        chatScreen.classList.remove("hidden");
-
-        // Kết nối WebSocket ngay
-        initWebSocket();
-
-    } catch (error) {
-        console.error("Lỗi kết nối Backend, bật chế độ Demo Offline:", error);
-        // Cho phép vào test giao diện ngay cả khi chưa mở Backend
-        currentUser = username;
-        userDisplay.textContent = `@${currentUser}`;
-        loginScreen.classList.add("hidden");
-        chatScreen.classList.remove("hidden");
-        initWebSocket();
-    }
-});
-
-// 2. MỞ KẾT NỐI WEBSOCKET REALTIME
-function initWebSocket() {
-    try {
-        socket = new WebSocket(WS_BASE_URL);
-
-        socket.onopen = () => {
-            console.log("🟢 WebSocket đã kết nối thành công!");
-        };
-
-        // Khi nhận được tin nhắn từ Server Backend
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            // data nhận về dự kiến: { sender: "user1", content: "hello" }
-            renderMessage(data.sender, data.content);
-        };
-
-        socket.onclose = () => {
-            console.log("🔴 WebSocket đã đóng kết nối.");
-        };
-
-        socket.onerror = (err) => {
-            console.error("Lỗi WebSocket:", err);
-        };
-    } catch (e) {
-        console.log("Chưa thể kết nối WebSocket do Backend chưa bật.");
-    }
-}
-
-// 3. XỬ LÝ GỬI TIN NHẮN
-function handleSendMessage() {
-    const text = messageInput.value.trim();
-    if (!text) return;
-
-    const payload = {
-        sender: currentUser,
-        content: text
     };
+}
 
-    // Nếu WebSocket đang mở thì gửi qua Server
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(payload));
+// 4. HIỂN THỊ TIN NHẮN & THÔNG BÁO
+function renderMessage(msg) {
+    const div = document.createElement("div");
+
+    if (msg.type === "system") {
+        div.className = "msg system";
+        div.innerHTML = `<div class="content">${msg.content} (${msg.timestamp})</div>`;
     } else {
-        // Nếu chưa bật Backend, tự hiện tin nhắn lên màn hình để TEST UI
-        renderMessage(currentUser, text);
+        const isSent = msg.sender === currentUsername;
+        div.className = `msg ${isSent ? 'sent' : 'received'}`;
+        div.innerHTML = `
+            <div class="meta">${isSent ? '' : msg.sender + ' • '} ${msg.timestamp || ''}</div>
+            <div class="content">${msg.content}</div>
+        `;
     }
 
-    // Xóa trống ô nhập & focus lại
-    messageInput.value = "";
-    messageInput.focus();
+    messagesContainer.appendChild(div);
 }
 
-// Sự kiện bấm nút Gửi hoặc nhấn phím Enter
-sendBtn.addEventListener("click", handleSendMessage);
+// 5. CẬP NHẬT DANH SÁCH ONLINE
+function updateUserList(users) {
+    userCount.innerText = users.length;
+    usersList.innerHTML = users.map(u => `<li>🟢 ${u}</li>`).join("");
+}
+
+// Auto Scroll xuống cuối
+function scrollToBottom() {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// 6. GỬI TIN NHẮN
+function sendMessage() {
+    const content = messageInput.value.trim();
+    if (content && socket) {
+        socket.send(JSON.stringify({ content }));
+        messageInput.value = "";
+    }
+}
+
+sendBtn.addEventListener("click", sendMessage);
 messageInput.addEventListener("keypress", (e) => {
-    if (e.key === "Enter") handleSendMessage();
+    if (e.key === "Enter") sendMessage();
 });
 
-// 4. HIỂN THỊ TIN NHẮN LÊN MÀN HÌNH & TỰ ĐỘNG CUỘN (AUTO-SCROLL)
-function renderMessage(sender, text) {
-    const isMe = sender === currentUser;
-    
-    const msgDiv = document.createElement("div");
-    msgDiv.classList.add("msg", isMe ? "me" : "other");
-
-    msgDiv.innerHTML = `
-        <span class="sender-name">${isMe ? "Bạn" : sender}</span>
-        <div class="msg-text">${text}</div>
-    `;
-
-    messagesBox.appendChild(msgDiv);
-
-    // Tự động cuộn xuống tin nhắn mới nhất
-    messagesBox.scrollTop = messagesBox.scrollHeight;
-}
+// THOÁT
+logoutBtn.addEventListener("click", () => {
+    if (socket) socket.close();
+    location.reload();
+});
