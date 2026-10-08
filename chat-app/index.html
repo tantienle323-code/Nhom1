@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App Realtime</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="container">
+        <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ -->
+        <div id="login-screen" class="card">
+            <h2>💬 Nhóm Chat Realtime</h2>
+            <p class="subtitle">Nhập tên tài khoản để bắt đầu</p>
+            
+            <div class="form-group">
+                <input type="text" id="username-input" placeholder="Tên đăng nhập (VD: user1)..." autocomplete="off" />
+            </div>
+            
+            <button id="login-btn">Vào Phòng Chat</button>
+        </div>
+
+        <!-- 2. KHUNG CHAT CHÍNH -->
+        <div id="chat-screen" class="card hidden">
+            <!-- Header phòng chat -->
+            <div class="chat-header">
+                <div class="room-info">
+                    <span class="status-dot"></span>
+                    <h3>Phòng Chat Chung</h3>
+                </div>
+                <div class="user-info">
+                    <span id="user-display">@user</span>
+                </div>
+            </div>
+
+            <!-- Khung hiển thị tin nhắn -->
+            <div id="messages-box" class="messages-box">
+                <div class="system-msg">Chào mừng bạn đến với phòng chat!</div>
+            </div>
+
+            <!-- Ô nhập & nút gửi tin nhắn -->
+            <div class="chat-input-area">
+                <input type="text" id="message-input" placeholder="Nhập tin nhắn..." autocomplete="off" />
+                <button id="send-btn">
+                    <span>Gửi</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
