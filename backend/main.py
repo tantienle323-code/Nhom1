@@ -8,14 +8,14 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Cho phép tất cả các nguồn (origins)
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],  # Cho phép tất cả các phương thức GET, POST,...
     allow_headers=["*"],
 )
 
 # Kết nối Database (Local hoặc Atlas)
-MONGO_URL = "mongodb+srv://admin:<db_password>@khang.8uvqzff.mongodb.net/?appName=khang"
+MONGO_URL =  "mongodb+srv://admin:ankhang2006@khang.8uvqzff.mongodb.net/chat_db?retryWrites=true&w=majority"
 client = AsyncIOMotorClient(MONGO_URL)
 db = client["chat_db"]
 messages_collection = db["messages"]
