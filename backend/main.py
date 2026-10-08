@@ -1,13 +1,11 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
-from typing import List
-import json
+from motor.motor_asyncio import AsyncIOMotorClient
+import datetime
 
 app = FastAPI()
 
-# 1. CẤU HÌNH CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,15 +14,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. KHAI BÁO MONGODB ATLAS (Điền chuỗi kết nối của ní vào đây)
-MONGO_URL = "mongodb+srv://admin:<db_password>@khang.8uvqzff.mongodb.net/?appName=khang"
-
+# Kết nối Database (Local hoặc Atlas)
+MONGO_URL = "mongodb://localhost:27017"
 client = AsyncIOMotorClient(MONGO_URL)
 db = client["chat_db"]
 messages_collection = db["messages"]
 
-
-# 3. REST API
 class LoginSchema(BaseModel):
     username: str
 
@@ -32,68 +27,82 @@ class LoginSchema(BaseModel):
 async def login(data: LoginSchema):
     return {"status": "ok", "username": data.username}
 
-@app.get("/api/messages")
-async def get_messages():
-    # Lấy 50 tin nhắn gần nhất từ MongoDB Atlas
-    cursor = messages_collection.find({}, {"_id": 0}).sort("_id", -1).limit(50)
+@app.get("/api/messages/{room}")
+async def get_messages(room: str):
+    # Lấy 50 tin nhắn gần nhất theo phòng
+    cursor = messages_collection.find({"room": room}, {"_id": 0}).sort("timestamp", -1).limit(50)
     messages = await cursor.to_list(length=50)
     messages.reverse()
     return messages
 
-
-# 4. QUẢN LÝ WEBSOCKET
+# QUẢN LÝ WEBSOCKET & MULTI-ROOM
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        # Lưu kết nối dạng: { room_name: { username: websocket } }
+        self.rooms: dict[str, dict[str, WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, room: str, username: str, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        if room not in self.rooms:
+            self.rooms[room] = {}
+        self.rooms[room][username] = websocket
+        
+        # Báo cho phòng biết có người mới vào + gửi danh sách online
+        await self.broadcast_system_message(room, f"🟢 {username} đã tham gia phòng.")
+        await self.broadcast_user_list(room)
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+    def disconnect(self, room: str, username: str):
+        if room in self.rooms and username in self.rooms[room]:
+            del self.rooms[room][username]
 
-    async def broadcast(self, message: dict):
-        for connection in list(self.active_connections):
-            try:
-                await connection.send_text(json.dumps(message))
-            except Exception:
-                self.disconnect(connection)
+    async def broadcast_to_room(self, room: str, message_data: dict):
+        if room in self.rooms:
+            for connection in self.rooms[room].values():
+                await connection.send_json(message_data)
+
+    async def broadcast_system_message(self, room: str, text: str):
+        sys_msg = {
+            "type": "system",
+            "content": text,
+            "timestamp": datetime.datetime.now().strftime("%H:%M")
+        }
+        await self.broadcast_to_room(room, sys_msg)
+
+    async def broadcast_user_list(self, room: str):
+        if room in self.rooms:
+            user_list = list(self.rooms[room].keys())
+            msg = {
+                "type": "user_list",
+                "users": user_list
+            }
+            await self.broadcast_to_room(room, msg)
 
 manager = ConnectionManager()
 
-
-# 5. WEBSOCKET ENDPOINT
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+@app.websocket("/ws/{room}/{username}")
+async def websocket_endpoint(websocket: WebSocket, room: str, username: str):
+    await manager.connect(room, username, websocket)
     try:
         while True:
-            data_str = await websocket.receive_text()
-            data = json.loads(data_str)
+            data = await websocket.receive_json()
+            timestamp = datetime.datetime.now().strftime("%H:%M")
             
-            sender = data.get("sender")
-            content = data.get("content")
-
-            if sender and content:
-                # Lưu vào MongoDB Atlas
-                try:
-                    await messages_collection.insert_one({
-                        "sender": sender,
-                        "content": content
-                    })
-                except Exception as e:
-                    print(f"Lỗi lưu DB: {e}")
-
-                # Gửi cho tất cả client
-                await manager.broadcast({
-                    "sender": sender,
-                    "content": content
-                })
-
+            msg_doc = {
+                "type": "chat",
+                "room": room,
+                "sender": username,
+                "content": data["content"],
+                "timestamp": timestamp
+            }
+            
+            # Lưu vào MongoDB
+            await messages_collection.insert_one(msg_doc)
+            
+            # Xóa _id do MongoDB tự sinh ra trước khi broadcast
+            msg_doc.pop("_id", None)
+            await manager.broadcast_to_room(room, msg_doc)
+            
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-    except Exception as e:
-        print(f"Lỗi WebSocket: {e}")
-        manager.disconnect(websocket)
+        manager.disconnect(room, username)
+        await manager.broadcast_system_message(room, f"🔴 {username} đã rời phòng.")
+        await manager.broadcast_user_list(room) 
