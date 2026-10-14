@@ -1,8 +1,8 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from motor.motor_asyncio import AsyncIOMotorClient
 from database import user_collection, message_collection, room_collection
+from pymongo.errors import PyMongoError
 import datetime
 
 app = FastAPI()
@@ -17,10 +17,6 @@ app.add_middleware(
 
 # Kết nối Database (Local hoặc Atlas)
 MONGO_URL =  "mongodb+srv://admin:ankhang2006@khang.8uvqzff.mongodb.net/chat_db?retryWrites=true&w=majority"
-client = AsyncIOMotorClient(MONGO_URL)
-db = client["chat_db"]
-messages_collection = db["messages"]
-
 class LoginSchema(BaseModel):
     username: str
 
@@ -31,8 +27,17 @@ async def login(data: LoginSchema):
 @app.get("/api/messages/{room}")
 async def get_messages(room: str):
     # Lấy 50 tin nhắn gần nhất theo phòng
-    cursor = messages_collection.find({"room": room}, {"_id": 0}).sort("timestamp", -1).limit(50)
-    messages = await cursor.to_list(length=50)
+    try:
+        cursor = message_collection.find(
+            {"room": room}, {"_id": 0}
+        ).sort("timestamp", -1).limit(50)
+        messages = await cursor.to_list(length=50)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Không thể kết nối MongoDB. Hãy kiểm tra MONGO_URI trong backend/.env.",
+        ) from exc
+
     messages.reverse()
     return messages
 
@@ -97,7 +102,7 @@ async def websocket_endpoint(websocket: WebSocket, room: str, username: str):
             }
             
             # Lưu vào MongoDB
-            await messages_collection.insert_one(msg_doc)
+            await message_collection.insert_one(msg_doc)
             
             # Xóa _id do MongoDB tự sinh ra trước khi broadcast
             msg_doc.pop("_id", None)

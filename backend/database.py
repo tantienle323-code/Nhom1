@@ -4,15 +4,14 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
-# Load biến môi trường từ file .env
-load_dotenv()
+# Load biến môi trường từ file .env cạnh module này.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Lấy chuỗi kết nối từ .env
 MONGO_URI = os.getenv("MONGO_URI")
 
 if not MONGO_URI:
-    # Chuỗi URI mặc định phòng trường hợp chưa cài .env (Thay <username> & <password> nếu cần)
-    MONGO_URI = "mongodb+srv://<username>:<password>@cluster0.mongodb.net/chat_db?retryWrites=true&w=majority"
+    raise RuntimeError("MONGO_URI must be configured in backend/.env")
 
 # Khởi tạo Async MongoDB Client
 client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)

@@ -1,6 +1,7 @@
 const API_URL = "http://127.0.0.1:8000/api";
 const WS_URL = "ws://127.0.0.1:8000/ws";
 
+// Sử dụng 'let' để có thể gán kết nối khi người dùng đăng nhập
 let socket = null;
 let currentUsername = "";
 let currentRoom = "";
@@ -32,36 +33,58 @@ loginBtn.addEventListener("click", async () => {
     currentUsername = username;
     currentRoom = room;
 
-    // Gọi API Login
-    await fetch(`${API_URL}/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username })
-    });
+    try {
+        // Gọi API Login (nếu có endpoint này)
+        await fetch(`${API_URL}/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username })
+        }).catch(err => console.log("Bỏ qua lỗi API Login nếu không bắt buộc:", err));
 
-    // Chuyển giao diện
-    loginScreen.classList.add("hidden");
-    chatScreen.classList.remove("hidden");
-    roomTitle.innerText = `Phòng: ${roomSelect.options[roomSelect.selectedIndex].text}`;
-    userInfo.innerText = `Tài khoản: ${username}`;
+        // Chuyển giao diện
+        loginScreen.classList.add("hidden");
+        chatScreen.classList.remove("hidden");
+        roomTitle.innerText = `Phòng: ${roomSelect.options[roomSelect.selectedIndex].text}`;
+        userInfo.innerText = `Tài khoản: ${username}`;
 
-    // Tải lịch sử & Đăng ký WebSocket
-    await loadHistory(room);
-    connectWebSocket(room, username);
+        // Tải lịch sử & Đăng ký WebSocket
+        await loadHistory(room);
+        connectWebSocket(room, username);
+    } catch (error) {
+        console.error("Lỗi khi đăng nhập:", error);
+    }
 });
 
 // 2. LOAD LỊCH SỬ TIN NHẮN
 async function loadHistory(room) {
     messagesContainer.innerHTML = "";
-    const res = await fetch(`${API_URL}/messages/${room}`);
-    const history = await res.json();
-    history.forEach(msg => renderMessage(msg));
-    scrollToBottom();
+    try {
+        const res = await fetch(`${API_URL}/messages/${encodeURIComponent(room)}`);
+        const response = await res.json();
+        if (!res.ok) {
+            throw new Error(response.detail || `HTTP ${res.status}`);
+        }
+        if (Array.isArray(response)) {
+            response.forEach(msg => renderMessage(msg));
+            scrollToBottom();
+        }
+    } catch (err) {
+        console.log("Không thể tải lịch sử tin nhắn:", err);
+        renderMessage({
+            type: "system",
+            content: "Không tải được lịch sử. Hãy kiểm tra cấu hình MongoDB trong backend/.env."
+        });
+    }
 }
 
 // 3. KẾT NỐI WEBSOCKET
 function connectWebSocket(room, username) {
-    socket = new WebSocket(`${WS_URL}/${room}/${username}`);
+    const wsEndpoint = `${WS_URL}/${encodeURIComponent(room)}/${encodeURIComponent(username)}`;
+    socket = new WebSocket(wsEndpoint);
+
+    socket.onopen = () => {
+        console.log("Đã kết nối thành công tới WebSocket Server!");
+    };
 
     socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -73,6 +96,14 @@ function connectWebSocket(room, username) {
             scrollToBottom();
         }
     };
+
+    socket.onerror = (error) => {
+        console.error("Lỗi kết nối WebSocket:", error);
+    };
+
+    socket.onclose = () => {
+        console.log("Đã đóng kết nối WebSocket.");
+    };
 }
 
 // 4. HIỂN THỊ TIN NHẮN & THÔNG BÁO
@@ -81,12 +112,12 @@ function renderMessage(msg) {
 
     if (msg.type === "system") {
         div.className = "msg system";
-        div.innerHTML = `<div class="content">${msg.content} (${msg.timestamp})</div>`;
+        div.innerHTML = `<div class="content">${msg.content} ${msg.timestamp ? '(' + msg.timestamp + ')' : ''}</div>`;
     } else {
         const isSent = msg.sender === currentUsername;
         div.className = `msg ${isSent ? 'sent' : 'received'}`;
         div.innerHTML = `
-            <div class="meta">${isSent ? '' : msg.sender + ' • '} ${msg.timestamp || ''}</div>
+            <div class="meta">${isSent ? '' : (msg.sender || 'Người dùng') + ' • '} ${msg.timestamp || ''}</div>
             <div class="content">${msg.content}</div>
         `;
     }
@@ -96,6 +127,7 @@ function renderMessage(msg) {
 
 // 5. CẬP NHẬT DANH SÁCH ONLINE
 function updateUserList(users) {
+    if (!usersList || !userCount) return;
     userCount.innerText = users.length;
     usersList.innerHTML = users.map(u => `<li>🟢 ${u}</li>`).join("");
 }
@@ -108,8 +140,14 @@ function scrollToBottom() {
 // 6. GỬI TIN NHẮN
 function sendMessage() {
     const content = messageInput.value.trim();
-    if (content && socket) {
-        socket.send(JSON.stringify({ content }));
+    if (content && socket && socket.readyState === WebSocket.OPEN) {
+        // Đóng gói đầy đủ thông tin gửi đi
+        const payload = {
+            sender: currentUsername,
+            content: content,
+            type: "chat"
+        };
+        socket.send(JSON.stringify(payload));
         messageInput.value = "";
     }
 }
