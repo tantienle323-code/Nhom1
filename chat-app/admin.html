@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trang Quản Lý Admin</title>
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #f4f6f9; padding: 20px; margin: 0; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { color: #333; margin-top: 0; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #007bff; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-danger { background-color: #dc3545; color: white; }
+        .btn-warning { background-color: #ffc107; color: #212529; }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn:hover { opacity: 0.85; }
+        .refresh-btn { float: right; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>⚙️ Hệ Thống Quản Lý Tài Khoản (Admin)</h2>
+        <button class="btn btn-primary refresh-btn" onclick="fetchUsers()">🔄 Làm mới danh sách</button>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>STT</th>
+                    <th>Tên Tài Khoản</th>
+                    <th>Ngày Tạo</th>
+                    <th>Thao Tác</th>
+                </tr>
+            </thead>
+            <tbody id="user-table-body">
+                <tr><td colspan="4" style="text-align:center;">Đang tải danh sách...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000/api/admin";
+
+        // 1. Lấy danh sách tài khoản
+        async function fetchUsers() {
+            const tbody = document.getElementById("user-table-body");
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">Đang tải...</td></tr>`;
+
+            try {
+                const res = await fetch(`${API_URL}/users`);
+                const users = await res.json();
+
+                if (!users.length) {
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">Chưa có tài khoản nào.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = users.map((u, index) => `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td><b>${u.username}</b></td>
+                        <td>${u.created_at || 'Không rõ'}</td>
+                        <td>
+                            <button class="btn btn-warning" onclick="resetPassword('${u._id}', '${u.username}')">🔑 Đổi mật khẩu</button>
+                            <button class="btn btn-danger" onclick="deleteUser('${u._id}', '${u.username}')">🗑️ Xóa</button>
+                        </td>
+                    </tr>
+                `).join("");
+            } catch (err) {
+                console.error(err);
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:red;">Không thể kết nối đến Backend! Hãy bật server FastAPI.</td></tr>`;
+            }
+        }
+
+        // 2. Xóa tài khoản
+        async function deleteUser(userId, username) {
+            if (confirm(`Bạn có chắc chắn muốn xóa tài khoản "${username}"?`)) {
+                try {
+                    const res = await fetch(`${API_URL}/users/${userId}`, { method: 'DELETE' });
+                    const data = await res.json();
+                    alert(data.message || "Đã xóa!");
+                    fetchUsers();
+                } catch (err) {
+                    alert("Lỗi khi xóa tài khoản!");
+                }
+            }
+        }
+
+        // 3. Đổi mật khẩu cho tài khoản
+        async function resetPassword(userId, username) {
+            const newPwd = prompt(`Nhập mật khẩu mới cho tài khoản "${username}":`);
+            if (newPwd && newPwd.trim() !== "") {
+                try {
+                    const res = await fetch(`${API_URL}/users/${userId}/reset-password`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ new_password: newPwd.trim() })
+                    });
+                    const data = await res.json();
+                    alert(data.message || "Đã cập nhật mật khẩu!");
+                } catch (err) {
+                    alert("Lỗi khi đổi mật khẩu!");
+                }
+            }
+        }
+
+        // Tự động tải danh sách khi mở trang
+        fetchUsers();
+    </script>
+</body>
+</html>
