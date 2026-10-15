@@ -128,6 +128,34 @@ async def reset_user_password(user_id: str, data: ResetPasswordSchema):
         raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
     return {"status": "ok", "message": "Đã đổi mật khẩu thành công"}
 
+# --- CÁC API DÀNH CHO PROFILE ---
+
+class UpdateProfileSchema(BaseModel):
+    bio: str = ""
+    avatar_url: str = ""
+
+# 1. Lấy thông tin cá nhân
+@app.get("/api/profile/{username}")
+async def get_profile(username: str):
+    user = await user_collection.find_one({"username": username}, {"password": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+    user["_id"] = str(user["_id"])
+    if "created_at" in user and isinstance(user["created_at"], datetime.datetime):
+        user["created_at"] = user["created_at"].strftime("%Y-%m-%d %H:%M")
+    return user
+
+# 2. Cập nhật thông tin cá nhân (Bio, Avatar URL)
+@app.put("/api/profile/{username}")
+async def update_profile(username: str, data: UpdateProfileSchema):
+    result = await user_collection.update_one(
+        {"username": username},
+        {"$set": {"bio": data.bio, "avatar_url": data.avatar_url}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+    return {"status": "ok", "message": "Cập nhật trang cá nhân thành công!"}
+
 # QUẢN LÝ WEBSOCKET & MULTI-ROOM
 class ConnectionManager:
     def __init__(self):
@@ -222,6 +250,7 @@ async def websocket_endpoint(websocket: WebSocket, room: str, username: str):
                     "type": "delete_message",
                     "_id": msg_id
                 })
+
 
     except WebSocketDisconnect:
         manager.disconnect(room, username)
