@@ -3,69 +3,84 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat Realtime</title>
+    <title>Ứng dụng chat</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ -->
-        <div id="login-screen" class="card">
-            <h2>💬 Nhóm Chat Realtime</h2>
-            
-            <!-- Tab Chuyển đổi Form -->
+    <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ (TELEGRAM STYLE) -->
+    <div id="login-screen" class="tg-auth-container">
+        <div class="tg-auth-card">
+            <div class="tg-logo">✈️</div>
+            <h2>Ứng dụng chat</h2>
+            <p style="color: #7f91a4; font-size: 13px; margin-bottom: 20px;">Vui lòng đăng nhập để bắt đầu trò chuyện</p>
+
             <div class="auth-tabs">
                 <button id="tab-login-btn" class="active">Đăng nhập</button>
                 <button id="tab-register-btn">Đăng ký</button>
             </div>
 
-            <div class="auth-box">
-                <div class="form-group">
-                    <input type="text" id="username-input" placeholder="Nhập tên tài khoản..." />
-                    <input type="password" id="password-input" placeholder="Nhập mật khẩu..." />
-                    
-                    <!-- Ô xác nhận mật khẩu (Chỉ hiện khi Đăng ký) -->
-                    <input type="password" id="confirm-password-input" placeholder="Xác nhận lại mật khẩu..." class="hidden" />
-
-                    <!-- Thẻ chọn phòng (Chỉ hiện khi Đăng nhập) -->
-                    <div id="room-select-group">
-                        <select id="room-select" style="width: 100%;">
-                            <option value="chung">Phòng Chung 💬</option>
-                            <option value="hoc-tap">Phòng Học Tập 📚</option>
-                            <option value="giai-tri">Phòng Giải Trí 🎮</option>
-                        </select>
-                    </div>
-                </div>
-
-                <button id="auth-submit-btn" class="btn-primary" style="width: 100%; margin-top: 10px;">Vào Phòng Chat</button>
+            <div class="auth-form">
+                <input type="text" id="username-input" placeholder="Tên tài khoản..." />
+                <input type="password" id="password-input" placeholder="Mật khẩu..." />
+                <input type="password" id="confirm-password-input" placeholder="Xác nhận mật khẩu..." class="hidden" />
+                <button id="auth-submit-btn" class="btn-telegram">ĐĂNG NHẬP</button>
             </div>
         </div>
+    </div>
 
-        <!-- 2. PHÒNG CHAT CHÍNH -->
-        <div id="chat-screen" class="card hidden">
-            <div class="chat-header">
-                <div>
-                    <h3 id="room-title">Phòng Chat</h3>
-                    <small id="user-info"></small>
-                </div>
-                <button id="logout-btn">Thoát</button>
-            </div>
-
-            <div class="chat-body">
-                <div class="messages-container" id="messages-container"></div>
-                <div class="online-users-sidebar">
-                    <h4>Online (<span id="user-count">0</span>)</h4>
-                    <ul id="users-list"></ul>
+    <!-- 2. GIAO DIỆN TELEGRAM DESKTOP 2 CỘT -->
+    <div id="chat-screen" class="tg-layout hidden">
+        <!-- CỘT TRÁI: SIDEBAR DANH SÁCH CHAT -->
+        <aside class="tg-sidebar">
+            <div class="tg-sidebar-header">
+                <button id="my-profile-modal-btn" class="tg-menu-btn" title="Cài đặt cá nhân">☰</button>
+                <div class="tg-search-wrapper">
+                    <input type="text" placeholder="Tìm kiếm..." />
                 </div>
             </div>
+            <ul id="users-list" class="tg-chat-list"></ul>
+        </aside>
 
-            <div class="chat-footer">
-                <input type="text" id="message-input" placeholder="Nhập tin nhắn..." />
-                <button id="send-btn">Gửi</button>
+        <!-- CỘT PHẢI: KHUNG CHAT CHÍNH -->
+        <main class="tg-chat-main">
+            <div class="tg-chat-header">
+                <div class="tg-header-info">
+                    <img id="header-avatar" src="https://via.placeholder.com/40" class="tg-avatar" />
+                    <div>
+                        <h4 id="header-name">Chọn cuộc trò chuyện</h4>
+                        <small id="header-status" class="tg-status">trực tuyến</small>
+                    </div>
+                </div>
+                <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất">🚪</button>
+            </div>
+
+            <div class="tg-messages-container" id="messages-container">
+                <div class="tg-empty-notice">Chọn một cuộc trò chuyện để bắt đầu gửi tin nhắn</div>
+            </div>
+
+            <div class="tg-chat-footer">
+                <input type="text" id="message-input" placeholder="Viết tin nhắn..." />
+                <button id="send-btn" class="tg-send-btn">✈️</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL PROFILE/SETTINGS (TELEGRAM STYLE) -->
+    <div id="profile-modal" class="modal-overlay hidden">
+        <div class="tg-modal-card">
+            <h3>⚙️ Cài đặt tài khoản</h3>
+            <div class="tg-form-group">
+                <label>Tài khoản: <b id="profile-username" style="color: #5288c1;"></b></label>
+                <input type="text" id="profile-avatar-input" placeholder="URL Ảnh đại diện..." />
+                <input type="text" id="profile-bio-input" placeholder="Mô tả tiểu sử..." />
+            </div>
+            <div class="tg-modal-actions">
+                <button id="save-profile-btn" class="btn-telegram">LƯU</button>
+                <button id="close-profile-btn" class="btn-cancel">HỦY</button>
             </div>
         </div>
     </div>
 
     <script src="app.js"></script>
-    
 </body>
 </html>
