@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101923">
+    <title>Game Center - Chat Realtime</title>
+    <link rel="stylesheet" href="arcade.css">
+</head>
+<body>
+    <main class="arcade-shell">
+        <header class="arcade-header">
+            <a href="index.html">← Trở lại chat</a>
+            <span class="brand">CHAT <b>ARCADE</b></span>
+            <span id="player-name"></span>
+        </header>
+        <section class="arcade-intro">
+            <span>GAME CENTER</span>
+            <h1>Chọn trò chơi</h1>
+            <p>Mời bạn bè hoặc ghép trận nhanh với người chơi khác.</p>
+        </section>
+        <section class="game-cards">
+            <a class="game-card tetris" href="game.html">
+                <span class="card-icon">🧱</span>
+                <span class="badge">ĐỐI KHÁNG 1V1</span>
+                <h2>Xếp gạch</h2>
+                <p>Xếp khối, xóa hàng và trụ lâu hơn đối thủ.</p>
+                <span class="play-link">Chơi ngay <b>→</b></span>
+            </a>
+            <a class="game-card gomoku" href="play.html?game=gomoku">
+                <span class="card-icon">⭕</span>
+                <span class="badge">ĐỐI KHÁNG 1V1</span>
+                <h2>Cờ caro</h2>
+                <p>Nối 5 quân liên tiếp trước đối thủ trên bàn cờ 15 × 15.</p>
+                <span class="play-link">Chơi ngay <b>→</b></span>
+            </a>
+            <a class="game-card rps" href="play.html?game=rps">
+                <span class="card-icon">✊</span>
+                <span class="badge">BO3 · ĐỐI KHÁNG 1V1</span>
+                <h2>Oẳn tù tì</h2>
+                <p>Chọn bí mật, cùng mở và thắng 2 vòng để giành chiến thắng.</p>
+                <span class="play-link">Chơi ngay <b>→</b></span>
+            </a>
+            <a class="game-card duel" href="play.html?game=duel">
+                <span class="card-icon">🐔</span>
+                <span class="badge">PHẢN XẠ · ĐỐI KHÁNG 1V1</span>
+                <h2>Đấu vui</h2>
+                <p>Canh tín hiệu, nhấn thật nhanh. Thắng 2 vòng để thắng trận.</p>
+                <span class="play-link">Chơi ngay <b>→</b></span>
+            </a>
+        </section>
+        <p id="arcade-status" role="status">Đang kiểm tra đăng nhập...</p>
+    </main>
+    <script src="arcade.js"></script>
+</body>
+</html>

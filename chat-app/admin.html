@@ -3,158 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trang Quản Lý Admin</title>
+    <title>Quản lý tài khoản</title>
     <style>
-        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background-color: #f4f6f9; padding: 20px; margin: 0; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        
-        /* Đổi header sang Flexbox thay cho float */
-        .header-actions { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
-        h2 { color: #333; margin: 0; }
-        
+        * { box-sizing: border-box; font-family: "Segoe UI", Tahoma, sans-serif; }
+        body { background: #f4f6f9; color: #263445; margin: 0; padding: 24px; }
+        main { max-width: 1000px; margin: 0 auto; padding: 24px; background: #fff; border-radius: 12px; box-shadow: 0 4px 18px #16283a18; }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 2px solid #5288c1; padding-bottom: 16px; margin-bottom: 18px; }
+        h1 { font-size: 22px; margin: 0; }
+        .toolbar, .actions { display: flex; align-items: center; gap: 8px; }
+        button, .link { display: inline-block; border: 0; border-radius: 6px; padding: 9px 12px; color: #fff; background: #5288c1; cursor: pointer; font-size: 14px; text-decoration: none; }
+        button:hover, .link:hover { filter: brightness(.92); }
+        button.danger { background: #dc3545; }
+        button.warning { color: #263445; background: #ffc107; }
+        #status { min-height: 22px; color: #5b6b7b; }
+        #status.error { color: #bd2433; }
+        .table-wrap { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #007bff; color: white; }
-        tr:hover { background-color: #f1f1f1; }
-        
-        .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
-        .btn-danger { background-color: #dc3545; color: white; }
-        .btn-warning { background-color: #ffc107; color: #212529; }
-        .btn-primary { background-color: #007bff; color: white; }
-        .btn:hover { opacity: 0.85; }
+        th, td { padding: 12px 10px; text-align: left; border-bottom: 1px solid #e3e8ed; }
+        th { background: #edf4fb; }
+        @media (max-width: 650px) {
+            body { padding: 10px; }
+            main { padding: 16px; }
+            header { align-items: flex-start; flex-direction: column; }
+            .actions { align-items: stretch; flex-direction: column; }
+            button { white-space: nowrap; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header-actions">
-            <h2>⚙️ Hệ Thống Quản Lý Tài Khoản (Admin)</h2>
-            <button class="btn btn-primary" onclick="fetchUsers()">🔄 Làm mới danh sách</button>
+    <main>
+        <header>
+            <h1>Quản lý tài khoản</h1>
+            <nav class="toolbar">
+                <a class="link" href="index.html">Quay lại chat</a>
+                <button id="refresh-btn" type="button">Làm mới</button>
+                <button id="logout-btn" type="button">Đăng xuất</button>
+            </nav>
+        </header>
+        <p id="status" role="status">Đang kiểm tra quyền quản trị...</p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>STT</th><th>Tài khoản</th><th>Ngày tạo</th><th>Thao tác</th></tr>
+                </thead>
+                <tbody id="user-table-body"></tbody>
+            </table>
         </div>
-        
-        <table>
-            <thead>
-                <tr>
-                    <th>STT</th>
-                    <th>Tên Tài Khoản</th>
-                    <th>Ngày Tạo</th>
-                    <th>Thao Tác</th>
-                </tr>
-            </thead>
-            <tbody id="user-table-body">
-                <tr><td colspan="4" style="text-align:center;">Đang tải danh sách...</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <script>
-        const API_URL = "http://127.0.0.1:8000/api/admin";
-
-        // Hàm hỗ trợ chống lỗi XSS
-        function escapeHTML(str) {
-            if (!str) return '';
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
-        }
-
-        // Lấy Token xác thực từ LocalStorage
-        function getAuthHeaders() {
-            const token = localStorage.getItem("token");
-            return {
-                'Content-Type': 'application/json',
-                'Authorization': token ? `Bearer ${token}` : ''
-            };
-        }
-
-        // 1. Lấy danh sách tài khoản
-        async function fetchUsers() {
-            const tbody = document.getElementById("user-table-body");
-            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">Đang tải...</td></tr>`;
-
-            try {
-                const res = await fetch(`${API_URL}/users`, {
-                    headers: getAuthHeaders()
-                });
-
-                if (res.status === 401 || res.status === 403) {
-                    alert("Bạn không có quyền Admin hoặc phiên đăng nhập đã hết hạn!");
-                    window.location.href = "login.html";
-                    return;
-                }
-
-                if (!res.ok) throw new Error("Lỗi tải dữ liệu");
-
-                const users = await res.json();
-
-                if (!users.length) {
-                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">Chưa có tài khoản nào.</td></tr>`;
-                    return;
-                }
-
-                tbody.innerHTML = users.map((u, index) => {
-                    const safeUsername = escapeHTML(u.username);
-                    const safeId = escapeHTML(u._id);
-                    const formattedDate = u.created_at ? new Date(u.created_at).toLocaleString('vi-VN') : 'Không rõ';
-
-                    return `
-                        <tr>
-                            <td>${index + 1}</td>
-                            <td><b>${safeUsername}</b></td>
-                            <td>${formattedDate}</td>
-                            <td>
-                                <button class="btn btn-warning" onclick="resetPassword('${safeId}', '${safeUsername}')">🔑 Đổi mật khẩu</button>
-                                <button class="btn btn-danger" onclick="deleteUser('${safeId}', '${safeUsername}')">🗑️ Xóa</button>
-                            </td>
-                        </tr>
-                    `;
-                }).join("");
-            } catch (err) {
-                console.error(err);
-                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:red;">Không thể kết nối đến Backend! Hãy kiểm tra Server FastAPI.</td></tr>`;
-            }
-        }
-
-        // 2. Xóa tài khoản
-        async function deleteUser(userId, username) {
-            if (confirm(`Bạn có chắc chắn muốn xóa tài khoản "${username}"?`)) {
-                try {
-                    const res = await fetch(`${API_URL}/users/${userId}`, { 
-                        method: 'DELETE',
-                        headers: getAuthHeaders()
-                    });
-                    const data = await res.json();
-                    alert(data.message || "Đã xóa!");
-                    fetchUsers();
-                } catch (err) {
-                    alert("Lỗi khi xóa tài khoản!");
-                }
-            }
-        }
-
-        // 3. Đổi mật khẩu cho tài khoản
-        async function resetPassword(userId, username) {
-            const newPwd = prompt(`Nhập mật khẩu mới cho tài khoản "${username}":`);
-            if (newPwd && newPwd.trim() !== "") {
-                try {
-                    const res = await fetch(`${API_URL}/users/${userId}/reset-password`, {
-                        method: 'PUT',
-                        headers: getAuthHeaders(),
-                        body: JSON.stringify({ new_password: newPwd.trim() })
-                    });
-                    const data = await res.json();
-                    alert(data.message || "Đã cập nhật mật khẩu!");
-                } catch (err) {
-                    alert("Lỗi khi đổi mật khẩu!");
-                }
-            }
-        }
-
-        // Tự động tải danh sách khi mở trang
-        fetchUsers();
-    </script>
+    </main>
+    <script src="admin.js"></script>
 </body>
 </html>

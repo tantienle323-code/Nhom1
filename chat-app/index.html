@@ -19,12 +19,12 @@
                 <button id="tab-register-btn">Đăng ký</button>
             </div>
 
-            <div class="auth-form">
-                <input type="text" id="username-input" placeholder="Tên tài khoản..." />
-                <input type="password" id="password-input" placeholder="Mật khẩu..." />
-                <input type="password" id="confirm-password-input" placeholder="Xác nhận mật khẩu..." class="hidden" />
-                <button id="auth-submit-btn" class="btn-telegram">ĐĂNG NHẬP</button>
-            </div>
+            <form id="auth-form" class="auth-form">
+                <input type="text" id="username-input" placeholder="Tên tài khoản (3-30 ký tự, không dấu)..." autocomplete="username" autocapitalize="off" minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]{3,30}" title="Dùng 3-30 chữ cái không dấu, chữ số, dấu chấm, gạch ngang hoặc gạch dưới." required />
+                <input type="password" id="password-input" placeholder="Mật khẩu (ít nhất 8 ký tự)..." autocomplete="current-password" minlength="8" maxlength="72" required />
+                <input type="password" id="confirm-password-input" placeholder="Xác nhận mật khẩu..." autocomplete="new-password" class="hidden" />
+                <button id="auth-submit-btn" class="btn-telegram" type="submit">ĐĂNG NHẬP</button>
+            </form>
         </div>
     </div>
 
@@ -45,13 +45,19 @@
         <main class="tg-chat-main">
             <div class="tg-chat-header">
                 <div class="tg-header-info">
+                    <button id="back-users-btn" class="tg-icon-btn back-users-btn" type="button" aria-label="Danh sách cuộc trò chuyện">←</button>
                     <img id="header-avatar" src="https://via.placeholder.com/40" class="tg-avatar" />
                     <div>
                         <h4 id="header-name">Chọn cuộc trò chuyện</h4>
-                        <small id="header-status" class="tg-status">trực tuyến</small>
+                        <small id="header-status" class="tg-status">ngoại tuyến</small>
                     </div>
                 </div>
-                <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất">🚪</button>
+                <div class="header-actions">
+                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
+                    <a class="tg-admin-link" href="arcade.html">🎮 Chơi game</a>
+                    <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
+                    <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất">🚪</button>
+                </div>
             </div>
 
             <div class="tg-messages-container" id="messages-container">
@@ -79,6 +85,54 @@
                 <button id="close-profile-btn" class="btn-cancel">HỦY</button>
             </div>
         </div>
+    </div>
+
+    <div id="world-modal" class="modal-overlay hidden">
+        <section class="world-modal-card" role="dialog" aria-modal="true" aria-labelledby="world-title">
+            <button id="world-close-btn" class="world-close-btn" type="button" aria-label="Đóng">×</button>
+            <div class="world-hero">
+                <span id="world-landmark" class="world-landmark" aria-hidden="true">🏝️</span>
+                <div>
+                    <p class="world-eyebrow">THẾ GIỚI CỦA HAI ĐỨA</p>
+                    <h2 id="world-title">Thế giới chung</h2>
+                    <p id="world-description" class="world-description"></p>
+                </div>
+            </div>
+            <div class="world-level-row">
+                <span id="world-stage-name"></span>
+                <span id="world-stage-level"></span>
+            </div>
+            <div class="world-progress-track" role="progressbar" aria-label="Tiến trình mở rộng thế giới">
+                <div id="world-progress-fill" class="world-progress-fill"></div>
+            </div>
+            <p id="world-progress-label" class="world-progress-label"></p>
+            <div class="world-stats">
+                <div><strong id="world-message-count">0</strong><span>Tin nhắn</span></div>
+                <div><strong id="world-game-count">0</strong><span>Trận đã chơi</span></div>
+                <div><strong id="world-memory-count">0</strong><span>Kỷ niệm</span></div>
+            </div>
+
+            <section class="world-memories-section">
+                <div class="world-section-heading">
+                    <div><p class="world-eyebrow">DẤU ẤN CỦA RIÊNG HAI BẠN</p><h3>Kỷ niệm</h3></div>
+                    <span>Chỉ lưu điều bạn chủ động chọn</span>
+                </div>
+                <div id="world-memories" class="world-memories-list" aria-live="polite"></div>
+            </section>
+
+            <form id="world-memory-form" class="world-memory-form">
+                <h3>Ghim một kỷ niệm</h3>
+                <p>Tự chọn nội dung muốn lưu. Tin nhắn không được tự động phân tích hay đưa vào đây.</p>
+                <div id="world-source-preview" class="world-source-preview hidden">
+                    <span id="world-source-text"></span>
+                    <button id="world-clear-source-btn" type="button" aria-label="Bỏ liên kết tin nhắn">×</button>
+                </div>
+                <input id="world-memory-title" type="text" maxlength="80" placeholder="Tên kỷ niệm" required>
+                <textarea id="world-memory-note" maxlength="500" placeholder="Ghi chú (không bắt buộc)"></textarea>
+                <button id="world-memory-save-btn" class="btn-telegram" type="submit">Lưu vào thế giới</button>
+            </form>
+            <p id="world-feedback" class="world-feedback" role="status"></p>
+        </section>
     </div>
 
     <script src="app.js"></script>

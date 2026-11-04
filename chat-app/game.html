@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101923">
+    <title>Xếp gạch đối kháng - Chat Realtime</title>
+    <link rel="stylesheet" href="game.css">
+</head>
+<body>
+    <main class="game-shell">
+        <header class="game-header">
+            <a class="back-link" href="arcade.html">← Game Center</a>
+            <div class="brand">CHAT <span>ARCADE</span></div>
+            <span id="player-name" class="player-name"></span>
+        </header>
+
+        <section class="intro">
+            <p class="eyebrow">CHẾ ĐỘ ĐỐI KHÁNG 1V1</p>
+            <h1>Xếp gạch</h1>
+            <p>Ghép trận ngẫu nhiên và xem ai trụ lại lâu hơn.</p>
+        </section>
+
+        <section class="arena" aria-label="Khu vực chơi xếp gạch">
+            <aside class="opponent-panel panel">
+                <p class="panel-label">ĐỐI THỦ</p>
+                <h2 id="opponent-name">Đang chờ đối thủ</h2>
+                <div class="opponent-icon" aria-hidden="true">⚔️</div>
+                <p id="opponent-status" class="muted">Hãy nhấn tìm trận để bắt đầu.</p>
+                <div class="stat"><span>ĐIỂM ĐỐI THỦ</span><strong id="opponent-score">0</strong></div>
+                <div class="stat"><span>TRẬN ĐẤU</span><strong id="match-status">Chưa vào trận</strong></div>
+            </aside>
+
+            <div class="board-wrap">
+                <div id="game-overlay" class="game-overlay">
+                    <div class="overlay-card">
+                        <div class="overlay-icon">🧱</div>
+                        <h2 id="overlay-title">Sẵn sàng chưa?</h2>
+                        <p id="game-message">Tìm một người chơi khác đang trực tuyến để đấu 1v1.</p>
+                        <button id="find-match-btn" class="primary-button" type="button">Tìm trận</button>
+                    </div>
+                </div>
+                <canvas id="game-board" width="300" height="600" aria-label="Bàn xếp gạch"></canvas>
+            </div>
+
+            <aside class="player-panel panel">
+                <p class="panel-label">BẠN</p>
+                <h2 id="board-player-name">Người chơi</h2>
+                <div class="next-piece">
+                    <span>KHỐI TIẾP THEO</span>
+                    <canvas id="next-piece" width="120" height="90" aria-label="Khối gạch tiếp theo"></canvas>
+                </div>
+                <div class="stat"><span>ĐIỂM</span><strong id="player-score">0</strong></div>
+                <div class="stat"><span>HÀNG ĐÃ XÓA</span><strong id="player-lines">0</strong></div>
+                <p class="keyboard-hint">← → di chuyển · ↑ xoay<br>↓ rơi nhanh · Space rơi ngay</p>
+            </aside>
+        </section>
+
+        <section class="touch-controls" aria-label="Nút điều khiển">
+            <button type="button" data-action="left" aria-label="Sang trái">←</button>
+            <button type="button" data-action="rotate" aria-label="Xoay khối">↻</button>
+            <button type="button" data-action="right" aria-label="Sang phải">→</button>
+            <button type="button" data-action="down" aria-label="Rơi nhanh">↓</button>
+            <button type="button" data-action="drop" aria-label="Thả khối">⤓</button>
+        </section>
+        <p id="connection-status" class="connection-status" role="status">Đang kiểm tra đăng nhập...</p>
+    </main>
+    <script src="tetris.js"></script>
+</body>
+</html>

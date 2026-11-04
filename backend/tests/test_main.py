@@ -1,0 +1,262 @@
+import asyncio
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import main
+
+
+class AuthTests(unittest.TestCase):
+    def test_password_hash_preserves_whitespace(self):
+        hashed = main.hash_password("password with spaces ")
+        self.assertTrue(main.verify_password("password with spaces ", hashed))
+        self.assertFalse(main.verify_password("password with spaces", hashed))
+
+    def test_access_token_round_trip_and_tamper_detection(self):
+        token = main.create_access_token("alice")
+        self.assertEqual(main.decode_access_token(token), "alice")
+        with self.assertRaises(HTTPException) as error:
+            main.decode_access_token(token[:-1] + ("A" if token[-1] != "A" else "B"))
+        self.assertEqual(error.exception.status_code, 401)
+
+    def test_expired_access_token_is_rejected(self):
+        with patch.object(main, "TOKEN_TTL_SECONDS", -1):
+            token = main.create_access_token("alice")
+        with self.assertRaises(HTTPException):
+            main.decode_access_token(token)
+
+    def test_invalid_auth_input_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            main.AuthSchema(username="a!", password="short")
+        with self.assertRaises(ValidationError):
+            main.AuthSchema(username="alice", password="mật_khẩu" * 10)
+
+    def test_private_room_id_is_order_independent(self):
+        self.assertEqual(main.private_room_id("alice", "bob"), main.private_room_id("bob", "alice"))
+
+    def test_room_membership_is_checked_against_registered_users(self):
+        class Cursor:
+            async def to_list(self, length):
+                return [{"username": "bob"}]
+
+        class Users:
+            def find(self, query, projection):
+                return Cursor()
+
+        with patch.object(main, "user_collection", Users()):
+            self.assertTrue(asyncio.run(main.is_room_member("chat_alice_bob", "alice")))
+            self.assertFalse(asyncio.run(main.is_room_member("chat_alice_eve", "alice")))
+
+    def test_auth_dependency_rejects_missing_credentials(self):
+        with self.assertRaises(HTTPException) as error:
+            asyncio.run(main.get_current_username(None))
+        self.assertEqual(error.exception.status_code, 401)
+
+
+class PrivateWorldTests(unittest.IsolatedAsyncioTestCase):
+    async def test_world_progress_counts_messages_memories_and_games(self):
+        progress = main.build_world_progress(message_count=5, memory_count=1, game_count=1)
+
+        self.assertEqual(progress["score"], 30)
+        self.assertEqual(progress["name"], "Quán quen")
+        self.assertEqual(progress["level"], 3)
+        self.assertEqual(progress["progress"], 0)
+
+    async def test_world_requires_another_member_of_the_private_chat(self):
+        with self.assertRaises(HTTPException) as self_chat:
+            await main.require_world_room("alice", "alice")
+        self.assertEqual(self_chat.exception.status_code, 400)
+
+        with patch.object(main, "is_room_member", new=AsyncMock(return_value=False)):
+            with self.assertRaises(HTTPException) as unknown_chat:
+                await main.require_world_room("eve", "alice")
+        self.assertEqual(unknown_chat.exception.status_code, 404)
+
+    async def test_memory_schema_rejects_blank_title_and_trims_text(self):
+        with self.assertRaises(ValidationError):
+            main.WorldMemorySchema(title="   ")
+
+        memory = main.WorldMemorySchema(title="  First memory  ", note="  A note  ")
+        self.assertEqual(memory.title, "First memory")
+        self.assertEqual(memory.note, "A note")
+
+    async def test_completed_game_is_recorded_once_for_the_pair(self):
+        class Games:
+            def __init__(self):
+                self.documents = {}
+
+            async def insert_one(self, document):
+                if document["_id"] in self.documents:
+                    from pymongo.errors import DuplicateKeyError
+
+                    raise DuplicateKeyError("duplicate match")
+                self.documents[document["_id"]] = document
+
+        games = Games()
+        with patch.object(main, "world_game_collection", games):
+            await main.record_world_game("match-1", ("alice", "bob"))
+            await main.record_world_game("match-1", ("alice", "bob"))
+
+        self.assertEqual(len(games.documents), 1)
+        self.assertEqual(games.documents["match-1"]["room"], "chat_alice_bob")
+
+
+class FakeWebSocket:
+    def __init__(self):
+        self.events = []
+        self.close_code = None
+
+    async def send_json(self, event):
+        self.events.append(event)
+
+    async def close(self, code, reason):
+        self.close_code = code
+
+
+class TetrisMatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_waiting_players_are_matched_and_game_result_is_broadcast(self):
+        manager = main.TetrisMatchManager()
+        alice = FakeWebSocket()
+        bob = FakeWebSocket()
+
+        await manager.join("alice", alice)
+        await manager.join("bob", bob)
+
+        alice_match = next(event for event in alice.events if event["type"] == "matched")
+        bob_match = next(event for event in bob.events if event["type"] == "matched")
+        self.assertEqual(alice_match["opponent"], "bob")
+        self.assertEqual(bob_match["opponent"], "alice")
+        self.assertEqual(alice_match["game_id"], bob_match["game_id"])
+
+        await manager.update_score("alice", alice, 120)
+        self.assertEqual(bob.events[-1], {"type": "opponent_score", "score": 120})
+        await manager.finish("alice", alice, 150)
+        self.assertEqual(alice.events[-1]["result"], "lose")
+        self.assertEqual(bob.events[-1]["result"], "win")
+        self.assertEqual(alice.close_code, 4000)
+        self.assertEqual(manager.player_matches, {})
+
+    async def test_disconnecting_player_gives_opponent_a_win(self):
+        manager = main.TetrisMatchManager()
+        alice = FakeWebSocket()
+        bob = FakeWebSocket()
+        await manager.join("alice", alice)
+        await manager.join("bob", bob)
+
+        await manager.leave("alice", alice)
+
+        self.assertEqual(bob.events[-1]["result"], "win")
+        self.assertEqual(bob.events[-1]["reason"], "opponent_disconnected")
+        self.assertEqual(bob.close_code, 4001)
+
+    async def test_same_account_cannot_join_matchmaking_twice(self):
+        manager = main.TetrisMatchManager()
+        first = FakeWebSocket()
+        duplicate = FakeWebSocket()
+        await manager.join("alice", first)
+        await manager.join("alice", duplicate)
+
+        self.assertEqual(duplicate.events[0]["type"], "error")
+        self.assertEqual(duplicate.close_code, 4409)
+        self.assertEqual(len(manager.waiting), 1)
+
+
+class QuickGameMatchTests(unittest.IsolatedAsyncioTestCase):
+    async def make_match(self, manager, game):
+        alice = FakeWebSocket()
+        bob = FakeWebSocket()
+        await manager.join(game, "alice", alice)
+        await manager.join(game, "bob", bob)
+        return alice, bob
+
+    async def test_gomoku_alternates_turns_and_detects_five_in_a_row(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "gomoku")
+        for column in range(5):
+            await manager.handle("gomoku", "alice", alice, {"type": "move", "row": 0, "column": column})
+            if column < 4:
+                await manager.handle("gomoku", "bob", bob, {"type": "move", "row": 1, "column": column})
+        alice_results = [event for event in alice.events if event["type"] == "result"]
+        bob_results = [event for event in bob.events if event["type"] == "result"]
+        self.assertEqual(alice_results[-1]["result"], "win")
+        self.assertEqual(bob_results[-1]["result"], "lose")
+        self.assertEqual(len(manager.matches), 0)
+
+    async def test_rock_paper_scissors_hides_choice_until_both_choose(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "rps")
+        await manager.handle("rps", "alice", alice, {"type": "choice", "choice": "rock"})
+        self.assertFalse(any(event["type"] == "round_result" for event in alice.events))
+        await manager.handle("rps", "bob", bob, {"type": "choice", "choice": "scissors"})
+        self.assertEqual(
+            [event for event in alice.events if event["type"] == "round_result"][-1]["round_winner"],
+            "alice",
+        )
+        await manager.handle("rps", "alice", alice, {"type": "choice", "choice": "rock"})
+        await manager.handle("rps", "bob", bob, {"type": "choice", "choice": "scissors"})
+        self.assertEqual([event for event in alice.events if event["type"] == "result"][-1]["result"], "win")
+        self.assertEqual([event for event in bob.events if event["type"] == "result"][-1]["result"], "lose")
+
+    async def test_duel_early_reaction_loses_round_and_opponent_wins(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "duel")
+        await manager.handle("duel", "alice", alice, {"type": "ready"})
+        await manager.handle("duel", "bob", bob, {"type": "ready"})
+        game_id = manager.player_matches[("duel", "alice")]
+        task = manager.matches[game_id]["duel_task"]
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        await manager.handle("duel", "alice", alice, {"type": "react"})
+
+        self.assertEqual(
+            [event for event in bob.events if event["type"] == "round_result"][-1]["winner"],
+            "bob",
+        )
+        self.assertTrue(any(event["type"] == "ready_required" for event in alice.events))
+
+    async def test_gomoku_rejects_out_of_turn_and_occupied_cell_moves(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "gomoku")
+        await manager.handle("gomoku", "bob", bob, {"type": "move", "row": 0, "column": 0})
+        self.assertEqual(bob.events[-1]["type"], "error")
+        await manager.handle("gomoku", "alice", alice, {"type": "move", "row": 0, "column": 0})
+        await manager.handle("gomoku", "bob", bob, {"type": "move", "row": 0, "column": 0})
+        self.assertEqual(bob.events[-1]["type"], "error")
+        self.assertEqual(manager.matches[manager.player_matches[("gomoku", "alice")]]["board"][0][0], "X")
+
+    async def test_rock_paper_scissors_tied_round_does_not_award_a_point(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "rps")
+        await manager.handle("rps", "alice", alice, {"type": "choice", "choice": "paper"})
+        await manager.handle("rps", "bob", bob, {"type": "choice", "choice": "paper"})
+        result = [event for event in alice.events if event["type"] == "round_result"][-1]
+        self.assertIsNone(result["round_winner"])
+        self.assertEqual(result["your_round_wins"], 0)
+        self.assertEqual(result["opponent_round_wins"], 0)
+
+    async def test_duel_reaction_wins_round_and_two_rounds_win_match(self):
+        manager = main.QuickGameMatchManager()
+        alice, bob = await self.make_match(manager, "duel")
+        for _ in range(2):
+            await manager.handle("duel", "alice", alice, {"type": "ready"})
+            await manager.handle("duel", "bob", bob, {"type": "ready"})
+            game_id = manager.player_matches[("duel", "alice")]
+            task = manager.matches[game_id]["duel_task"]
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            manager.matches[game_id]["signal"] = True
+            await manager.handle("duel", "bob", bob, {"type": "react"})
+        self.assertEqual([event for event in bob.events if event["type"] == "result"][-1]["result"], "win")
+        self.assertEqual([event for event in alice.events if event["type"] == "result"][-1]["result"], "lose")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -4,8 +4,10 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
-# Load biến môi trường từ file .env cạnh module này.
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+# Load cấu hình riêng trước, sau đó dùng .env hiện có làm giá trị mặc định.
+backend_dir = os.path.dirname(__file__)
+load_dotenv(os.path.join(backend_dir, ".env.local"))
+load_dotenv(os.path.join(backend_dir, ".env"))
 
 # Lấy chuỗi kết nối từ .env
 MONGO_URI = os.getenv("MONGO_URI")
@@ -23,6 +25,8 @@ database = client["chat_db"]
 user_collection = database.get_collection("users")
 message_collection = database.get_collection("messages")
 room_collection = database.get_collection("rooms")
+world_memory_collection = database.get_collection("world_memories")
+world_game_collection = database.get_collection("world_games")
 
 
 # ==========================================

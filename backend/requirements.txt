@@ -3,3 +3,6 @@ uvicorn
 websockets
 motor
 pydantic
+bcrypt
+python-dotenv
+pymongo

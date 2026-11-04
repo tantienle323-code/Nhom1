@@ -1,45 +1,125 @@
-const API_URL = "http://127.0.0.1:8000/api";
-const WS_URL = "ws://127.0.0.1:8000/ws";
+const API_BASE = window.CHAT_API_URL || `${location.protocol === "https:" ? "https" : "http"}://${location.hostname || "127.0.0.1"}:8000`;
+const WS_BASE = window.CHAT_WS_URL || `${API_BASE.startsWith("https:") ? "wss" : "ws"}://${new URL(API_BASE).host}/ws`;
+const API_URL = `${API_BASE}/api`;
+const TOKEN_KEY = "chat_access_token";
+const DEFAULT_AVATAR = "https://via.placeholder.com/44";
 
 let socket = null;
 let currentUsername = "";
 let currentTargetUser = "";
 let currentRoom = "";
+let accessToken = localStorage.getItem(TOKEN_KEY) || "";
 let isRegisterMode = false;
+let users = [];
+let selectedMemoryMessageId = null;
+const onlineUsers = new Set();
 
-// DOM Elements
 const loginScreen = document.getElementById("login-screen");
 const chatScreen = document.getElementById("chat-screen");
+const authForm = document.getElementById("auth-form");
 const usernameInput = document.getElementById("username-input");
 const passwordInput = document.getElementById("password-input");
 const confirmPasswordInput = document.getElementById("confirm-password-input");
-
 const tabLoginBtn = document.getElementById("tab-login-btn");
 const tabRegisterBtn = document.getElementById("tab-register-btn");
 const authSubmitBtn = document.getElementById("auth-submit-btn");
 const logoutBtn = document.getElementById("logout-btn");
-
 const headerName = document.getElementById("header-name");
 const headerAvatar = document.getElementById("header-avatar");
+const headerStatus = document.getElementById("header-status");
 const messagesContainer = document.getElementById("messages-container");
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
 const usersList = document.getElementById("users-list");
-
-const myProfileModalBtn = document.getElementById("my-profile-modal-btn");
+const userSearch = document.querySelector(".tg-search-wrapper input");
+const adminLink = document.getElementById("admin-link");
+const chatLayout = document.getElementById("chat-screen");
 const profileModal = document.getElementById("profile-modal");
 const profileUsername = document.getElementById("profile-username");
 const profileAvatarInput = document.getElementById("profile-avatar-input");
 const profileBioInput = document.getElementById("profile-bio-input");
-const saveProfileBtn = document.getElementById("save-profile-btn");
-const closeProfileBtn = document.getElementById("close-profile-btn");
+const worldOpenButton = document.getElementById("world-open-btn");
+const worldModal = document.getElementById("world-modal");
+const worldMemoryForm = document.getElementById("world-memory-form");
+const worldMemoryTitle = document.getElementById("world-memory-title");
+const worldMemoryNote = document.getElementById("world-memory-note");
+const worldMemories = document.getElementById("world-memories");
+const worldFeedback = document.getElementById("world-feedback");
+const worldSourcePreview = document.getElementById("world-source-preview");
+const worldSourceText = document.getElementById("world-source-text");
 
-// 1. SWITCH TAB AUTH
+function formatApiError(detail) {
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+        const messages = detail.map((item) => {
+            if (typeof item === "string") return item;
+            if (!item || typeof item !== "object") return "";
+            const field = Array.isArray(item.loc) ? item.loc.at(-1) : "";
+            if (field === "username" && item.type === "string_too_short") {
+                return "Tên tài khoản phải có ít nhất 3 ký tự.";
+            }
+            if (field === "username" && item.type === "string_too_long") {
+                return "Tên tài khoản không được dài quá 30 ký tự.";
+            }
+            if (field === "password" && item.type === "string_too_short") {
+                return "Mật khẩu phải có ít nhất 8 ký tự.";
+            }
+            return String(item.msg || "Dữ liệu nhập chưa hợp lệ.").replace(/^Value error,\s*/, "");
+        }).filter(Boolean);
+        return [...new Set(messages)].join("\n");
+    }
+    return "Yêu cầu không thành công.";
+}
+
+async function apiFetch(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+    if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+
+    const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && accessToken) {
+        signOut(false);
+    }
+    if (!response.ok) throw new Error(formatApiError(data.detail));
+    return data;
+}
+
+function setAuthenticated(username, token, isAdmin) {
+    currentUsername = username;
+    accessToken = token;
+    localStorage.setItem(TOKEN_KEY, token);
+    adminLink.classList.toggle("hidden", !isAdmin);
+    loginScreen.classList.add("hidden");
+    chatScreen.classList.remove("hidden");
+    loadUsersList();
+}
+
+function showLogin() {
+    chatScreen.classList.add("hidden");
+    loginScreen.classList.remove("hidden");
+}
+
+function signOut(reload = true) {
+    accessToken = "";
+    currentUsername = "";
+    localStorage.removeItem(TOKEN_KEY);
+    if (socket) {
+        const oldSocket = socket;
+        socket = null;
+        oldSocket.close();
+    }
+    if (reload) location.reload();
+    else showLogin();
+}
+
 tabLoginBtn.addEventListener("click", () => {
     isRegisterMode = false;
     tabLoginBtn.classList.add("active");
     tabRegisterBtn.classList.remove("active");
     confirmPasswordInput.classList.add("hidden");
+    confirmPasswordInput.required = false;
+    passwordInput.autocomplete = "current-password";
     authSubmitBtn.innerText = "ĐĂNG NHẬP";
 });
 
@@ -48,235 +128,500 @@ tabRegisterBtn.addEventListener("click", () => {
     tabRegisterBtn.classList.add("active");
     tabLoginBtn.classList.remove("active");
     confirmPasswordInput.classList.remove("hidden");
+    confirmPasswordInput.required = true;
+    passwordInput.autocomplete = "new-password";
     authSubmitBtn.innerText = "ĐĂNG KÝ";
 });
 
-// 2. AUTH SUBMIT
-authSubmitBtn.addEventListener("click", async () => {
+authForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
     const username = usernameInput.value.trim();
-    const password = passwordInput.value.trim();
-    const confirmPassword = confirmPasswordInput.value.trim();
+    const password = passwordInput.value;
 
-    if (!username || !password) return alert("Vui lòng nhập tài khoản và mật khẩu!");
-
-    if (isRegisterMode) {
-        if (password !== confirmPassword) return alert("Mật khẩu không khớp!");
-        try {
-            const res = await fetch(`${API_URL}/register`, {
+    try {
+        if (isRegisterMode) {
+            if (password !== confirmPasswordInput.value) {
+                alert("Mật khẩu xác nhận không khớp.");
+                return;
+            }
+            await apiFetch("/register", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username, password }),
             });
-            const data = await res.json();
-            if (!res.ok) return alert(data.detail || "Đăng ký thất bại!");
-            alert("Đăng ký thành công!");
+            alert("Đăng ký thành công. Hãy đăng nhập để tiếp tục.");
             tabLoginBtn.click();
-        } catch (err) { alert("Không thể kết nối Backend!"); }
-    } else {
-        try {
-            const res = await fetch(`${API_URL}/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username, password })
-            });
-            const data = await res.json();
-            if (!res.ok) return alert(data.detail || "Sai thông tin đăng nhập!");
+            passwordInput.value = "";
+            confirmPasswordInput.value = "";
+            return;
+        }
 
-            currentUsername = data.username;
-            loginScreen.classList.add("hidden");
-            chatScreen.classList.remove("hidden");
-
-            await loadUsersList();
-        } catch (err) { alert("Không thể kết nối Backend!"); }
+        const result = await apiFetch("/login", {
+            method: "POST",
+            body: JSON.stringify({ username, password }),
+        });
+        setAuthenticated(result.username, result.access_token, result.is_admin);
+        passwordInput.value = "";
+    } catch (error) {
+        alert(error.message || "Không thể kết nối Backend.");
     }
 });
 
-// 3. TẠO ID PHÒNG CHAT RIÊNG 1-1
-function getPrivateRoomId(u1, u2) {
-    const sorted = [u1, u2].sort();
-    return `chat_${sorted[0]}_${sorted[1]}`;
+function getPrivateRoomId(usernameA, usernameB) {
+    const [first, second] = [usernameA, usernameB].sort();
+    return `chat_${first}_${second}`;
 }
 
-// 4. DANH SÁCH USER
+function safeAvatarUrl(value) {
+    try {
+        const url = new URL(value);
+        return ["http:", "https:"].includes(url.protocol) ? url.href : DEFAULT_AVATAR;
+    } catch {
+        return DEFAULT_AVATAR;
+    }
+}
+
+function renderUsersList() {
+    const filter = userSearch.value.trim().toLocaleLowerCase();
+    usersList.replaceChildren();
+    for (const user of users.filter((item) =>
+        item.username !== currentUsername && item.username.toLocaleLowerCase().includes(filter)
+    )) {
+        const item = document.createElement("li");
+        item.className = `tg-chat-item${currentTargetUser === user.username ? " active" : ""}`;
+        item.addEventListener("click", () => switchPrivateChat(user.username, user.avatar));
+
+        const avatar = document.createElement("img");
+        avatar.src = user.avatar;
+        avatar.alt = "";
+        avatar.className = "tg-avatar";
+        avatar.onerror = () => { avatar.src = DEFAULT_AVATAR; };
+
+        const info = document.createElement("div");
+        info.className = "info";
+        const name = document.createElement("h4");
+        name.textContent = user.username;
+        const bio = document.createElement("p");
+        bio.textContent = user.bio || "Nhấn để trò chuyện";
+        info.append(name, bio);
+        item.append(avatar, info);
+        usersList.append(item);
+    }
+}
+
 async function loadUsersList() {
     try {
-        const res = await fetch(`${API_URL}/users`);
-        const users = await res.json();
-        const otherUsers = users.filter(u => u !== currentUsername);
-
-        usersList.innerHTML = "";
-        for (let user of otherUsers) {
-            const pRes = await fetch(`${API_URL}/profile/${encodeURIComponent(user)}`);
-            const pData = pRes.ok ? await pRes.json() : {};
-            const avatar = pData.avatar_url || "https://via.placeholder.com/44";
-
-            const li = document.createElement("li");
-            li.className = "tg-chat-item";
-            li.onclick = () => switchPrivateChat(user, avatar);
-            li.innerHTML = `
-                <img src="${avatar}" class="tg-avatar" />
-                <div class="info">
-                    <h4>${user}</h4>
-                    <p>${pData.bio || 'Nhấn để trò chuyện'}</p>
-                </div>
-            `;
-            usersList.appendChild(li);
-        }
-    } catch (err) { console.error("Lỗi danh sách:", err); }
+        const usernames = await apiFetch("/users");
+        const profiles = await Promise.all(usernames
+            .filter((username) => username !== currentUsername)
+            .map(async (username) => {
+                const profile = await apiFetch(`/profile/${encodeURIComponent(username)}`);
+                return {
+                    username,
+                    bio: profile.bio || "",
+                    avatar: safeAvatarUrl(profile.avatar_url || DEFAULT_AVATAR),
+                };
+            }));
+        users = profiles;
+        renderUsersList();
+    } catch (error) {
+        console.error("Không thể tải danh sách người dùng:", error);
+        alert(error.message || "Không thể tải danh sách người dùng.");
+    }
 }
 
-// 5. CHUYỂN CHAT
-window.switchPrivateChat = async function(targetUser, avatar) {
+function setPresence(username, isOnline) {
+    if (isOnline) onlineUsers.add(username);
+    else onlineUsers.delete(username);
+    if (username === currentTargetUser) {
+        headerStatus.textContent = isOnline ? "trực tuyến" : "ngoại tuyến";
+        headerStatus.classList.toggle("is-online", isOnline);
+    }
+}
+
+async function switchPrivateChat(targetUser, avatar) {
     currentTargetUser = targetUser;
-    if (socket) socket.close();
-
+    worldOpenButton.disabled = false;
+    worldModal.classList.add("hidden");
+    clearMemorySource();
+    if (socket) {
+        const oldSocket = socket;
+        socket = null;
+        oldSocket.close();
+    }
     currentRoom = getPrivateRoomId(currentUsername, targetUser);
+    headerName.textContent = targetUser;
+    headerAvatar.src = safeAvatarUrl(avatar);
+    headerStatus.textContent = "đang kết nối...";
+    headerStatus.classList.remove("is-online");
+    chatLayout.classList.add("mobile-chat-open");
+    renderUsersList();
 
-    headerName.innerText = targetUser;
-    headerAvatar.src = avatar || "https://via.placeholder.com/44";
-
-    await loadHistory(currentRoom);
-    connectWebSocket(currentRoom, currentUsername);
-};
-
-// 6. LỊCH SỬ TIN NHẮN
-async function loadHistory(room) {
-    messagesContainer.innerHTML = "";
     try {
-        const res = await fetch(`${API_URL}/messages/${encodeURIComponent(room)}`);
-        const response = await res.json();
-        if (Array.isArray(response)) {
-            response.forEach(msg => renderMessage(msg));
-            scrollToBottom();
-        }
-    } catch (err) { console.log("Lỗi lịch sử:", err); }
+        await loadHistory(currentRoom);
+        connectWebSocket(currentRoom, currentUsername);
+    } catch (error) {
+        alert(error.message || "Không thể mở cuộc trò chuyện.");
+    }
 }
 
-// 7. WEBSOCKET
+async function loadHistory(room) {
+    messagesContainer.replaceChildren();
+    const history = await apiFetch(`/messages/${encodeURIComponent(room)}`);
+    if (!history.length) {
+        const notice = document.createElement("div");
+        notice.className = "tg-empty-notice";
+        notice.textContent = "Chưa có tin nhắn. Hãy bắt đầu trò chuyện!";
+        messagesContainer.append(notice);
+    } else {
+        for (const message of history) renderMessage(message);
+    }
+    scrollToBottom();
+}
+
 function connectWebSocket(room, username) {
-    const wsEndpoint = `${WS_URL}/${encodeURIComponent(room)}/${encodeURIComponent(username)}`;
-    socket = new WebSocket(wsEndpoint);
+    const endpoint = `${WS_BASE}/${encodeURIComponent(room)}/${encodeURIComponent(username)}`;
+    const activeSocket = new WebSocket(endpoint, [`bearer.${accessToken}`, "chat"]);
+    socket = activeSocket;
+    activeSocket.onopen = () => {
+        if (socket === activeSocket) {
+            headerStatus.textContent = "ngoại tuyến";
+            headerStatus.classList.remove("is-online");
+        }
+    };
+    activeSocket.onmessage = (event) => {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch {
+            console.error("Backend gửi dữ liệu WebSocket không hợp lệ.");
+            return;
+        }
 
-    socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-
-        if (data.type === "edit_message") {
-            const msgElem = document.getElementById(`msg-${data._id}`);
-            if (msgElem) {
-                const contentElem = msgElem.querySelector(".content");
-                if (contentElem) contentElem.innerText = data.new_content + " (đã sửa)";
+        if (data.type === "presence") {
+            setPresence(data.username, data.online);
+        } else if (data.type === "edit_message") {
+            const message = document.getElementById(`msg-${data._id}`);
+            const content = message?.querySelector(".content");
+            if (content) content.textContent = `${data.new_content} (đã sửa)`;
+        } else if (data.type === "delete_message") {
+            const message = document.getElementById(`msg-${data._id}`);
+            if (message) {
+                message.querySelector(".content").textContent = "Tin nhắn đã được thu hồi";
+                message.querySelector(".content").classList.add("deleted");
+                message.querySelector(".msg-actions")?.remove();
             }
-        } 
-        else if (data.type === "delete_message") {
-            const msgElem = document.getElementById(`msg-${data._id}`);
-            if (msgElem) {
-                const contentElem = msgElem.querySelector(".content");
-                if (contentElem) contentElem.innerHTML = `<i style="opacity:0.7">Tin nhắn đã được thu hồi</i>`;
-                const actionsElem = msgElem.querySelector(".msg-actions");
-                if (actionsElem) actionsElem.remove();
-            }
-        } 
-        else {
+        } else if (data.type === "error") {
+            alert(data.message);
+        } else {
             renderMessage(data);
             scrollToBottom();
+            if (!worldModal.classList.contains("hidden")) refreshWorld();
         }
+    };
+    activeSocket.onclose = (event) => {
+        if (socket !== activeSocket) return;
+        socket = null;
+        setPresence(currentTargetUser, false);
+        if (event.code === 4401) {
+            alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
+            signOut(false);
+        }
+    };
+    activeSocket.onerror = () => {
+        if (socket === activeSocket) headerStatus.textContent = "mất kết nối";
     };
 }
 
-// 8. RENDER MESSAGE
-function renderMessage(msg) {
-    const div = document.createElement("div");
-    const isSent = msg.sender === currentUsername;
-    div.className = `msg ${isSent ? 'sent' : 'received'}`;
-    if (msg._id) div.id = `msg-${msg._id}`;
+function renderMessage(message) {
+    if (message._id && document.getElementById(`msg-${message._id}`)) return;
+    messagesContainer.querySelector(".tg-empty-notice")?.remove();
+    const item = document.createElement("div");
+    const isSent = message.sender === currentUsername;
+    item.className = `msg ${isSent ? "sent" : "received"}`;
+    if (message._id) item.id = `msg-${message._id}`;
 
-    let contentHtml = msg.content;
-    if (msg.is_deleted) contentHtml = `<i style="opacity:0.7">Tin nhắn đã được thu hồi</i>`;
-    else if (msg.is_edited) contentHtml += " (đã sửa)";
+    const content = document.createElement("div");
+    content.className = "content";
+    content.textContent = message.is_deleted ? "Tin nhắn đã được thu hồi" :
+        `${message.content || ""}${message.is_edited ? " (đã sửa)" : ""}`;
+    if (message.is_deleted) content.classList.add("deleted");
 
-    let actionsHtml = "";
-    if (isSent && !msg.is_deleted && msg._id) {
-        actionsHtml = `
-            <div class="msg-actions">
-                <span onclick="editMsg('${msg._id}')">Sửa</span>
-                <span onclick="deleteMsg('${msg._id}')">Thu hồi</span>
-            </div>
-        `;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = message.timestamp || "";
+    item.append(content, meta);
+
+    if (message._id && !message.is_deleted) {
+        const actions = document.createElement("div");
+        actions.className = "msg-actions";
+        if (isSent) {
+            const edit = document.createElement("button");
+            edit.type = "button";
+            edit.textContent = "Sửa";
+            edit.addEventListener("click", () => editMessage(message._id, content.textContent));
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.textContent = "Thu hồi";
+            remove.addEventListener("click", () => deleteMessage(message._id));
+            actions.append(edit, remove);
+        }
+        const remember = document.createElement("button");
+        remember.type = "button";
+        remember.className = "save-memory-action";
+        remember.textContent = "🌱 Lưu kỷ niệm";
+        remember.addEventListener("click", () => openWorld(message));
+        actions.append(remember);
+        item.append(actions);
     }
-
-    div.innerHTML = `
-        <div class="content">${contentHtml}</div>
-        <div class="meta">${msg.timestamp || ''}</div>
-        ${actionsHtml}
-    `;
-
-    messagesContainer.appendChild(div);
+    messagesContainer.append(item);
 }
 
-// 9. ACTION
-window.editMsg = function(msgId) {
-    const msgElem = document.getElementById(`msg-${msgId}`);
-    const contentElem = msgElem ? msgElem.querySelector(".content") : null;
-    const oldContent = contentElem ? contentElem.innerText.replace(" (đã sửa)", "") : "";
+function clearMemorySource() {
+    selectedMemoryMessageId = null;
+    worldSourceText.textContent = "";
+    worldSourcePreview.classList.add("hidden");
+}
 
-    const newContent = prompt("Nhập nội dung mới:", oldContent);
-    if (newContent && newContent.trim() !== "" && newContent !== oldContent) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "edit_message", message_id: msgId, new_content: newContent.trim() }));
-        }
+async function openWorld(message = null) {
+    if (!currentTargetUser) return;
+    worldMemoryForm.reset();
+    worldFeedback.textContent = "";
+    worldFeedback.classList.remove("error");
+    clearMemorySource();
+    if (message?._id) {
+        selectedMemoryMessageId = message._id;
+        worldSourceText.textContent = message.content || "";
+        worldSourcePreview.classList.remove("hidden");
     }
-};
+    worldModal.classList.remove("hidden");
+    await refreshWorld();
+}
 
-window.deleteMsg = function(msgId) {
-    if (confirm("Thu hồi tin nhắn?")) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "delete_message", message_id: msgId }));
-        }
+async function refreshWorld() {
+    const targetUser = currentTargetUser;
+    if (!targetUser) return;
+    worldFeedback.textContent = "Đang tải thế giới...";
+    worldFeedback.classList.remove("error");
+    try {
+        const data = await apiFetch(`/world/${encodeURIComponent(targetUser)}`);
+        if (targetUser !== currentTargetUser) return;
+        document.getElementById("world-title").textContent = `${currentUsername} & ${targetUser}`;
+        document.getElementById("world-landmark").textContent = data.world.landmark;
+        document.getElementById("world-description").textContent = data.world.description;
+        document.getElementById("world-stage-name").textContent = data.world.name;
+        document.getElementById("world-stage-level").textContent = `Cấp ${data.world.level}`;
+        const progressFill = document.getElementById("world-progress-fill");
+        progressFill.style.width = `${Math.max(0, Math.min(100, data.world.progress))}%`;
+        document.querySelector(".world-progress-track").setAttribute("aria-valuenow", data.world.progress);
+        document.querySelector(".world-progress-track").setAttribute("aria-valuemin", "0");
+        document.querySelector(".world-progress-track").setAttribute("aria-valuemax", "100");
+        document.getElementById("world-progress-label").textContent = data.world.next_threshold === null ?
+            "Thế giới đã đạt cấp cao nhất hiện tại." :
+            `Thêm ${data.world.next_threshold - data.world.score} điểm chung để mở cột mốc tiếp theo.`;
+        document.getElementById("world-message-count").textContent = data.stats.messages;
+        document.getElementById("world-game-count").textContent = data.stats.games;
+        document.getElementById("world-memory-count").textContent = data.stats.memories;
+        renderWorldMemories(data.memories, data.memories_truncated);
+        worldFeedback.textContent = "";
+    } catch (error) {
+        if (targetUser !== currentTargetUser) return;
+        worldFeedback.textContent = error.message || "Không thể tải thế giới chung.";
+        worldFeedback.classList.add("error");
     }
-};
+}
 
-function scrollToBottom() { messagesContainer.scrollTop = messagesContainer.scrollHeight; }
+function renderWorldMemories(memories, truncated) {
+    worldMemories.replaceChildren();
+    if (!memories.length) {
+        const empty = document.createElement("p");
+        empty.className = "world-empty-memories";
+        empty.textContent = "Chưa có kỷ niệm nào. Hãy lưu điều đầu tiên mà hai bạn muốn nhớ!";
+        worldMemories.append(empty);
+        return;
+    }
+    for (const memory of memories) {
+        const card = document.createElement("article");
+        card.className = "world-memory-card";
+        const title = document.createElement("h4");
+        title.textContent = memory.title;
+        card.append(title);
+        if (memory.note) {
+            const note = document.createElement("p");
+            note.textContent = memory.note;
+            card.append(note);
+        }
+        if (memory.source_excerpt) {
+            const excerpt = document.createElement("blockquote");
+            excerpt.textContent = `“${memory.source_excerpt}”`;
+            card.append(excerpt);
+        }
+        const meta = document.createElement("div");
+        meta.className = "world-memory-meta";
+        const date = memory.created_at ? new Date(memory.created_at) : null;
+        const dateLabel = date && !Number.isNaN(date.valueOf()) ?
+            date.toLocaleString("vi-VN", { dateStyle: "medium", timeStyle: "short" }) : "";
+        meta.textContent = `${memory.created_by}${dateLabel ? ` · ${dateLabel}` : ""}`;
+        card.append(meta);
+        if (memory.created_by === currentUsername) {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "world-memory-delete";
+            remove.textContent = "Xóa";
+            remove.addEventListener("click", () => deleteWorldMemory(memory.id));
+            card.append(remove);
+        }
+        worldMemories.append(card);
+    }
+    if (truncated) {
+        const notice = document.createElement("p");
+        notice.className = "world-empty-memories";
+        notice.textContent = "Đang hiển thị 50 kỷ niệm gần nhất.";
+        worldMemories.append(notice);
+    }
+}
+
+worldOpenButton.addEventListener("click", () => openWorld());
+document.getElementById("world-close-btn").addEventListener("click", () => {
+    worldModal.classList.add("hidden");
+});
+worldModal.addEventListener("click", (event) => {
+    if (event.target === worldModal) worldModal.classList.add("hidden");
+});
+document.getElementById("world-clear-source-btn").addEventListener("click", clearMemorySource);
+worldMemoryForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const targetUser = currentTargetUser;
+    const saveButton = document.getElementById("world-memory-save-btn");
+    const payload = {
+        title: worldMemoryTitle.value.trim(),
+        note: worldMemoryNote.value.trim(),
+        message_id: selectedMemoryMessageId,
+    };
+    saveButton.disabled = true;
+    worldFeedback.textContent = "Đang lưu kỷ niệm...";
+    worldFeedback.classList.remove("error");
+    try {
+        await apiFetch(`/world/${encodeURIComponent(targetUser)}/memories`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
+        if (targetUser !== currentTargetUser) return;
+        worldMemoryForm.reset();
+        clearMemorySource();
+        worldFeedback.textContent = "Đã lưu kỷ niệm vào thế giới chung.";
+        await refreshWorld();
+    } catch (error) {
+        worldFeedback.textContent = error.message || "Không thể lưu kỷ niệm.";
+        worldFeedback.classList.add("error");
+    } finally {
+        saveButton.disabled = false;
+    }
+});
+
+async function deleteWorldMemory(memoryId) {
+    if (!confirm("Xóa kỷ niệm này khỏi thế giới chung?")) return;
+    try {
+        await apiFetch(`/world/${encodeURIComponent(currentTargetUser)}/memories/${encodeURIComponent(memoryId)}`, {
+            method: "DELETE",
+        });
+        await refreshWorld();
+    } catch (error) {
+        worldFeedback.textContent = error.message || "Không thể xóa kỷ niệm.";
+        worldFeedback.classList.add("error");
+    }
+}
+
+function editMessage(messageId, oldContent) {
+    const newContent = prompt("Nhập nội dung mới:", oldContent.replace(/ \(đã sửa\)$/, ""));
+    if (!newContent?.trim() || newContent.trim() === oldContent.replace(/ \(đã sửa\)$/, "")) return;
+    if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: "edit_message",
+            message_id: messageId,
+            new_content: newContent.trim(),
+        }));
+    }
+}
+
+function deleteMessage(messageId) {
+    if (confirm("Thu hồi tin nhắn này?") && socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "delete_message", message_id: messageId }));
+    }
+}
+
+function scrollToBottom() {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
 
 function sendMessage() {
-    if (!currentRoom) return alert("Vui lòng chọn 1 người bạn để nhắn!");
+    if (!currentRoom) return alert("Vui lòng chọn một người để nhắn tin.");
     const content = messageInput.value.trim();
-    if (content && socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ sender: currentUsername, content: content, type: "chat" }));
-        messageInput.value = "";
-    }
+    if (!content) return;
+    if (content.length > 2000) return alert("Tin nhắn không được dài quá 2000 ký tự.");
+    if (socket?.readyState !== WebSocket.OPEN) return alert("Đang kết nối lại. Vui lòng thử gửi lại.");
+    socket.send(JSON.stringify({ type: "chat", content }));
+    messageInput.value = "";
 }
 
 sendBtn.addEventListener("click", sendMessage);
-messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
-logoutBtn.addEventListener("click", () => { if (socket) socket.close(); location.reload(); });
+messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+    }
+});
+logoutBtn.addEventListener("click", () => signOut());
+userSearch.addEventListener("input", renderUsersList);
+document.getElementById("back-users-btn").addEventListener("click", () => {
+    chatLayout.classList.remove("mobile-chat-open");
+});
 
-// 10. PROFILE MODAL
-myProfileModalBtn.addEventListener("click", async () => {
+document.getElementById("my-profile-modal-btn").addEventListener("click", async () => {
     try {
-        const res = await fetch(`${API_URL}/profile/${encodeURIComponent(currentUsername)}`);
-        const user = await res.json();
-        profileUsername.innerText = user.username;
+        const user = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+        profileUsername.textContent = user.username;
         profileAvatarInput.value = user.avatar_url || "";
         profileBioInput.value = user.bio || "";
         profileModal.classList.remove("hidden");
-    } catch (err) { alert("Lỗi tải profile!"); }
+    } catch (error) {
+        alert(error.message || "Không thể tải hồ sơ.");
+    }
 });
 
-closeProfileBtn.addEventListener("click", () => profileModal.classList.add("hidden"));
+document.getElementById("close-profile-btn").addEventListener("click", () => {
+    profileModal.classList.add("hidden");
+});
 
-saveProfileBtn.addEventListener("click", async () => {
+profileModal.addEventListener("click", (event) => {
+    if (event.target === profileModal) profileModal.classList.add("hidden");
+});
+
+document.getElementById("save-profile-btn").addEventListener("click", async () => {
     try {
-        const res = await fetch(`${API_URL}/profile/${encodeURIComponent(currentUsername)}`, {
+        await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 avatar_url: profileAvatarInput.value.trim(),
-                bio: profileBioInput.value.trim()
-            })
+                bio: profileBioInput.value.trim(),
+            }),
         });
-        const data = await res.json();
-        alert(data.message || "Cập nhật thành công!");
         profileModal.classList.add("hidden");
         await loadUsersList();
-    } catch (err) { alert("Lỗi khi lưu!"); }
+        const myProfile = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+        if (currentTargetUser === currentUsername) headerAvatar.src = safeAvatarUrl(myProfile.avatar_url);
+    } catch (error) {
+        alert(error.message || "Không thể lưu hồ sơ.");
+    }
 });
+
+async function restoreSession() {
+    if (!accessToken) return;
+    try {
+        const user = await apiFetch("/me");
+        setAuthenticated(user.username, accessToken, user.is_admin);
+    } catch {
+        signOut(false);
+    }
+}
+
+restoreSession();

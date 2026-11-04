@@ -1,0 +1,88 @@
+:root {
+    color-scheme: dark;
+    font-family: Inter, "Segoe UI", sans-serif;
+    background: #101923;
+    color: #eef4fa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    background: radial-gradient(ellipse at 50% 34%, #1d3143 0%, #101923 62%);
+}
+
+button, a { font: inherit; }
+
+.game-shell { width: min(1120px, 100%); margin: 0 auto; padding: 20px 28px 28px; }
+.game-header { display: flex; align-items: center; justify-content: space-between; min-height: 42px; }
+.back-link { color: #a9bed1; text-decoration: none; font-size: 14px; }
+.back-link:hover { color: #fff; }
+.brand { letter-spacing: .16em; font-size: 12px; font-weight: 800; }
+.brand span { color: #60d4c2; }
+.player-name { color: #a9bed1; font-size: 13px; }
+
+.intro { text-align: center; margin: 22px 0 22px; }
+.eyebrow, .panel-label { color: #60d4c2; letter-spacing: .16em; font-size: 11px; font-weight: 800; }
+.intro h1 { margin: 6px 0; font-size: clamp(32px, 5vw, 46px); letter-spacing: -.04em; }
+.intro > p:last-child { margin: 0; color: #9eb0c1; font-size: 14px; }
+
+.arena { display: grid; grid-template-columns: minmax(190px, 1fr) 300px minmax(190px, 1fr); align-items: center; gap: 20px; }
+.panel { padding: 20px; background: #172432; border: 1px solid #293d50; border-radius: 14px; box-shadow: 0 14px 40px #0003; }
+.panel-label { margin: 0 0 10px; }
+.panel h2 { min-height: 25px; margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.muted { min-height: 38px; color: #91a5b8; font-size: 13px; line-height: 1.5; }
+.opponent-icon { display: grid; place-items: center; height: 96px; margin: 8px 0 18px; border-radius: 10px; background: #1d2e3e; font-size: 36px; }
+.stat { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 13px 0; border-top: 1px solid #2a3c4d; }
+.stat span, .next-piece > span { color: #91a5b8; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.stat strong { color: #f5f8fc; font-size: 18px; }
+.board-wrap { position: relative; width: 300px; height: 600px; overflow: hidden; border: 2px solid #39556d; border-radius: 8px; box-shadow: 0 18px 56px #0008; }
+#game-board { display: block; width: 100%; height: 100%; background: #0c131c; }
+.game-overlay { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; padding: 22px; background: #0b121bdc; text-align: center; }
+.game-overlay.hidden { display: none; }
+.overlay-card { max-width: 250px; }
+.overlay-icon { font-size: 36px; }
+.overlay-card h2 { margin: 10px 0; font-size: 23px; }
+.overlay-card p { color: #a9bed1; font-size: 14px; line-height: 1.6; }
+.primary-button { width: 100%; margin-top: 12px; padding: 13px 18px; border: 0; border-radius: 9px; background: #60d4c2; color: #0e201f; font-weight: 800; cursor: pointer; transition: transform .15s, filter .15s; }
+.primary-button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.primary-button:disabled { cursor: wait; opacity: .65; transform: none; }
+.next-piece { display: grid; justify-items: center; gap: 7px; padding: 8px 0 14px; }
+#next-piece { width: 120px; height: 90px; }
+.keyboard-hint { color: #91a5b8; font-size: 11px; line-height: 1.7; text-align: center; }
+.connection-status { min-height: 20px; margin: 16px 0 0; color: #91a5b8; font-size: 12px; text-align: center; }
+.touch-controls { display: none; }
+
+@media (max-width: 800px) {
+    .game-shell { padding: 14px 16px 22px; }
+    .intro { margin: 14px 0 16px; }
+    .arena { grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 12px; justify-content: center; }
+    .board-wrap { grid-column: 2; grid-row: 1 / span 2; width: min(100%, 300px); height: auto; aspect-ratio: 1 / 2; }
+    .opponent-panel, .player-panel { padding: 14px; }
+    .opponent-icon { height: 64px; }
+}
+
+@media (max-width: 540px) {
+    .game-shell { padding: 12px 12px 18px; }
+    .brand { display: none; }
+    .intro { margin: 14px 0 12px; }
+    .arena { grid-template-columns: minmax(0, 1fr) minmax(190px, 240px); gap: 9px; align-items: stretch; }
+    .board-wrap { width: 100%; }
+    .panel { padding: 10px; border-radius: 10px; }
+    .panel-label { margin-bottom: 6px; font-size: 9px; }
+    .panel h2 { min-height: 36px; font-size: 14px; }
+    .muted { min-height: 38px; font-size: 11px; }
+    .opponent-icon { height: 42px; margin: 4px 0 8px; font-size: 25px; }
+    .stat { padding: 9px 0; align-items: flex-start; }
+    .stat span { max-width: 65%; font-size: 9px; line-height: 1.4; }
+    .stat strong { font-size: 14px; }
+    .next-piece { padding: 4px 0 8px; }
+    .next-piece > span { font-size: 9px; }
+    #next-piece { width: 84px; height: 63px; }
+    .keyboard-hint { display: none; }
+    .touch-controls { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; max-width: 380px; margin: 12px auto 0; }
+    .touch-controls button { min-height: 46px; border: 1px solid #35516a; border-radius: 9px; background: #1a2a39; color: #ecf5fc; font-size: 22px; touch-action: manipulation; }
+    .touch-controls button:active { background: #60d4c2; color: #0e201f; }
+}

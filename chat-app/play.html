@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101923">
+    <title>Game đối kháng - Chat Realtime</title>
+    <link rel="stylesheet" href="play.css">
+</head>
+<body>
+    <main class="play-shell">
+        <header class="play-header">
+            <a href="arcade.html">← Game Center</a>
+            <span class="brand">CHAT <b>ARCADE</b></span>
+            <span id="player-name" class="player-name"></span>
+        </header>
+        <section class="play-intro">
+            <p class="eyebrow">ĐỐI KHÁNG TRỰC TUYẾN 1V1</p>
+            <h1 id="game-title">Đang tải trò chơi...</h1>
+            <p id="game-subtitle"></p>
+        </section>
+
+        <section class="match-layout">
+            <aside class="score-card">
+                <span>ĐỐI THỦ</span>
+                <strong id="opponent-name">Đang chờ</strong>
+                <p id="opponent-status">Tìm người chơi để bắt đầu.</p>
+                <div class="score-box"><small>ĐIỂM VÒNG</small><b id="opponent-score">0</b></div>
+            </aside>
+
+            <section id="game-stage" class="game-stage">
+                <div id="game-overlay" class="game-overlay">
+                    <div class="overlay-card">
+                        <div id="overlay-icon" class="overlay-icon">🎮</div>
+                        <h2 id="overlay-title">Sẵn sàng chưa?</h2>
+                        <p id="game-message">Tìm đối thủ để chơi trực tuyến.</p>
+                        <button id="find-match-btn" class="primary-button" type="button">Tìm trận</button>
+                    </div>
+                </div>
+
+                <div id="gomoku-view" class="game-view hidden">
+                    <div class="turn-line"><span id="turn-status">Đang chờ trận...</span><span id="gomoku-round">15 × 15</span></div>
+                    <div id="gomoku-board" class="gomoku-board" role="grid" aria-label="Bàn cờ caro 15 nhân 15"></div>
+                </div>
+
+                <div id="rps-view" class="game-view hidden">
+                    <div class="round-label" id="rps-round">THẮNG HAI VÒNG ĐỂ GIÀNH CHIẾN THẮNG</div>
+                    <div class="rps-arena">
+                        <div class="choice-side"><span id="rps-opponent-choice" class="choice-emoji">?</span><b id="rps-opponent-label">Đối thủ</b></div>
+                        <span class="versus">VS</span>
+                        <div class="choice-side"><span id="rps-your-choice" class="choice-emoji">?</span><b>Bạn</b></div>
+                    </div>
+                    <p id="rps-status" class="stage-status">Chọn một biểu tượng bên dưới.</p>
+                    <div class="choice-buttons">
+                        <button type="button" data-choice="rock"><span>✊</span> Búa</button>
+                        <button type="button" data-choice="paper"><span>✋</span> Bao</button>
+                        <button type="button" data-choice="scissors"><span>✌️</span> Kéo</button>
+                    </div>
+                </div>
+
+                <div id="duel-view" class="game-view hidden">
+                    <div class="round-label" id="duel-round">THẮNG HAI VÒNG ĐỂ GIÀNH CHIẾN THẮNG</div>
+                    <div id="duel-arena" class="duel-arena">
+                        <div id="opponent-avatar" class="duel-avatar opponent-avatar">🐔</div>
+                        <span class="versus">VS</span>
+                        <div id="your-avatar" class="duel-avatar your-avatar">🐤</div>
+                    </div>
+                    <p id="duel-status" class="stage-status">Nhấn sẵn sàng, chờ tín hiệu rồi phản xạ!</p>
+                    <button id="ready-btn" class="primary-button ready-button" type="button" disabled>Sẵn sàng</button>
+                </div>
+            </section>
+
+            <aside class="score-card your-card">
+                <span>BẠN</span>
+                <strong id="board-player-name">Người chơi</strong>
+                <p id="player-status">Chưa vào trận.</p>
+                <div class="score-box"><small>ĐIỂM VÒNG</small><b id="player-score">0</b></div>
+            </aside>
+        </section>
+        <p id="connection-status" class="connection-status" role="status">Đang kiểm tra đăng nhập...</p>
+    </main>
+    <script src="play.js"></script>
+</body>
+</html>
