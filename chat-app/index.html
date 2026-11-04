@@ -54,6 +54,7 @@
                 </div>
                 <div class="header-actions">
                     <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
+                    <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
                     <a class="tg-admin-link" href="arcade.html">🎮 Chơi game</a>
                     <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
                     <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất">🚪</button>
@@ -132,6 +133,47 @@
                 <button id="world-memory-save-btn" class="btn-telegram" type="submit">Lưu vào thế giới</button>
             </form>
             <p id="world-feedback" class="world-feedback" role="status"></p>
+        </section>
+    </div>
+
+    <div id="music-modal" class="modal-overlay hidden">
+        <section class="music-modal-card" role="dialog" aria-modal="true" aria-labelledby="music-title">
+            <button id="music-close-btn" class="world-close-btn" type="button" aria-label="Đóng trình phát">×</button>
+            <div class="music-heading">
+                <span class="music-icon" aria-hidden="true">♫</span>
+                <div>
+                    <p class="world-eyebrow">TRÌNH PHÁT CÁ NHÂN</p>
+                    <h2 id="music-title">Nhạc của bạn</h2>
+                </div>
+            </div>
+            <form id="music-link-form" class="music-link-form">
+                <label for="music-link-input">Link YouTube bài hát hoặc playlist</label>
+                <input id="music-link-input" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+                <input id="music-link-name" type="text" maxlength="100" placeholder="Tên gợi nhớ (không bắt buộc)">
+                <button class="music-add-button" type="submit">＋ Thêm vào danh sách</button>
+            </form>
+            <p class="music-privacy-note">Trên YouTube, chọn <b>Chia sẻ → Sao chép đường liên kết</b> rồi dán vào đây. Video phát từ YouTube; danh sách link chỉ lưu trong trình duyệt của bạn, không gửi lên máy chủ chat. Một số video có thể không cho phép nhúng.</p>
+
+            <div class="music-embed-wrap">
+                <iframe id="music-youtube-frame" class="hidden" title="Trình phát YouTube" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+                <div id="music-embed-empty" class="music-embed-empty">🎵<span>Thêm link YouTube để bắt đầu nghe</span></div>
+            </div>
+            <div class="music-current-track">
+                <span aria-hidden="true">🎧</span>
+                <div>
+                    <strong id="music-track-name">Chưa chọn bài hát</strong>
+                    <small id="music-playback-status">Dán link YouTube để bắt đầu.</small>
+                    <a id="music-open-source" class="music-open-source hidden" target="_blank" rel="noopener noreferrer">Mở trên YouTube</a>
+                </div>
+            </div>
+            <div class="music-controls">
+                <button id="music-previous-btn" type="button" aria-label="Link trước" disabled>⏮ Link trước</button>
+                <button id="music-stop-btn" type="button" aria-label="Dừng nhạc" disabled>⏹ Dừng nhạc</button>
+                <button id="music-next-btn" type="button" aria-label="Link tiếp theo" disabled>Link tiếp theo ⏭</button>
+            </div>
+            <div class="music-playlist-heading"><h3>Danh sách phát</h3><span id="music-track-count">0 bài</span></div>
+            <ul id="music-playlist" class="music-playlist" aria-label="Danh sách phát"></ul>
+            <p id="music-feedback" class="music-feedback" role="status"></p>
         </section>
     </div>
 

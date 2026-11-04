@@ -47,6 +47,23 @@ const worldMemories = document.getElementById("world-memories");
 const worldFeedback = document.getElementById("world-feedback");
 const worldSourcePreview = document.getElementById("world-source-preview");
 const worldSourceText = document.getElementById("world-source-text");
+const musicModal = document.getElementById("music-modal");
+const musicPlaylistElement = document.getElementById("music-playlist");
+const musicLinkForm = document.getElementById("music-link-form");
+const musicLinkInput = document.getElementById("music-link-input");
+const musicLinkName = document.getElementById("music-link-name");
+const musicTrackName = document.getElementById("music-track-name");
+const musicPlaybackStatus = document.getElementById("music-playback-status");
+const musicPreviousButton = document.getElementById("music-previous-btn");
+const musicStopButton = document.getElementById("music-stop-btn");
+const musicNextButton = document.getElementById("music-next-btn");
+const musicYouTubeFrame = document.getElementById("music-youtube-frame");
+const musicEmbedEmpty = document.getElementById("music-embed-empty");
+const musicOpenSource = document.getElementById("music-open-source");
+const musicFeedback = document.getElementById("music-feedback");
+const musicTrackCount = document.getElementById("music-track-count");
+let musicPlaylist = [];
+let currentMusicIndex = -1;
 
 function formatApiError(detail) {
     if (typeof detail === "string") return detail;
@@ -89,6 +106,7 @@ function setAuthenticated(username, token, isAdmin) {
     currentUsername = username;
     accessToken = token;
     localStorage.setItem(TOKEN_KEY, token);
+    loadYouTubePlaylist(username);
     adminLink.classList.toggle("hidden", !isAdmin);
     loginScreen.classList.add("hidden");
     chatScreen.classList.remove("hidden");
@@ -101,6 +119,16 @@ function showLogin() {
 }
 
 function signOut(reload = true) {
+    musicYouTubeFrame.src = "about:blank";
+    musicYouTubeFrame.classList.add("hidden");
+    musicEmbedEmpty.classList.remove("hidden");
+    musicOpenSource.classList.add("hidden");
+    musicModal.classList.add("hidden");
+    musicPlaylist = [];
+    currentMusicIndex = -1;
+    renderMusicPlaylist();
+    musicTrackName.textContent = "Chưa chọn bài hát";
+    musicPlaybackStatus.textContent = "Dán link YouTube để bắt đầu.";
     accessToken = "";
     currentUsername = "";
     localStorage.removeItem(TOKEN_KEY);
@@ -613,6 +641,231 @@ document.getElementById("save-profile-btn").addEventListener("click", async () =
         alert(error.message || "Không thể lưu hồ sơ.");
     }
 });
+
+function parseYouTubeLink(value) {
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        return null;
+    }
+    const host = url.hostname.toLowerCase();
+    const isShortLink = host === "youtu.be";
+    const isYouTubeHost = [
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "youtube-nocookie.com",
+        "www.youtube-nocookie.com",
+    ].includes(host);
+    if (url.protocol !== "https:" || (!isShortLink && !isYouTubeHost)) return null;
+
+    let videoId = "";
+    if (isShortLink) {
+        videoId = url.pathname.split("/").filter(Boolean)[0] || "";
+    } else {
+        videoId = url.searchParams.get("v") || "";
+        const pathMatch = url.pathname.match(/^\/(?:embed|shorts|live)\/([^/]+)/);
+        if (!videoId && pathMatch) videoId = pathMatch[1];
+    }
+    const playlistId = url.searchParams.get("list") || "";
+    if (videoId && !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+    if (playlistId && !/^[A-Za-z0-9_-]{10,100}$/.test(playlistId)) return null;
+    if (!videoId && !playlistId) return null;
+
+    const embedUrl = videoId ?
+        new URL(`/embed/${encodeURIComponent(videoId)}`, "https://www.youtube-nocookie.com") :
+        new URL("/embed/videoseries", "https://www.youtube-nocookie.com");
+    embedUrl.searchParams.set("rel", "0");
+    if (playlistId) embedUrl.searchParams.set("list", playlistId);
+    return {
+        embedUrl: embedUrl.href,
+        key: `${videoId}:${playlistId}`,
+        defaultName: playlistId && !videoId ? "Playlist YouTube" : `YouTube · ${videoId}`,
+    };
+}
+
+function musicStorageKey(username) {
+    return `chat_youtube_playlist_${username}`;
+}
+
+function saveYouTubePlaylist() {
+    try {
+        localStorage.setItem(musicStorageKey(currentUsername), JSON.stringify(
+            musicPlaylist.map(({ name, sourceUrl }) => ({ name, sourceUrl }))
+        ));
+        return true;
+    } catch (error) {
+        musicFeedback.textContent = error.message || "Không thể lưu danh sách link trong trình duyệt.";
+        musicFeedback.classList.add("error");
+        return false;
+    }
+}
+
+function loadYouTubePlaylist(username) {
+    musicPlaylist = [];
+    currentMusicIndex = -1;
+    musicYouTubeFrame.src = "about:blank";
+    musicYouTubeFrame.classList.add("hidden");
+    musicEmbedEmpty.classList.remove("hidden");
+    musicOpenSource.classList.add("hidden");
+    musicTrackName.textContent = "Chưa chọn bài hát";
+    musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
+    musicFeedback.textContent = "";
+    musicFeedback.classList.remove("error");
+    try {
+        const stored = JSON.parse(localStorage.getItem(musicStorageKey(username)) || "[]");
+        if (!Array.isArray(stored)) throw new TypeError("Danh sách nhạc đã lưu không hợp lệ.");
+        for (const entry of stored.slice(0, 50)) {
+            if (!entry || typeof entry.sourceUrl !== "string" || typeof entry.name !== "string") continue;
+            const parsed = parseYouTubeLink(entry.sourceUrl);
+            if (parsed) musicPlaylist.push({ ...parsed, name: entry.name, sourceUrl: entry.sourceUrl });
+        }
+    } catch (error) {
+        musicFeedback.textContent = error.message || "Không thể đọc danh sách link đã lưu.";
+        musicFeedback.classList.add("error");
+    }
+    renderMusicPlaylist();
+}
+
+function renderMusicPlaylist() {
+    musicPlaylistElement.replaceChildren();
+    musicTrackCount.textContent = `${musicPlaylist.length} bài`;
+    musicPreviousButton.disabled = musicPlaylist.length < 2 || currentMusicIndex < 0;
+    musicStopButton.disabled = currentMusicIndex < 0;
+    musicNextButton.disabled = musicPlaylist.length < 2 || currentMusicIndex < 0;
+    if (!musicPlaylist.length) {
+        const empty = document.createElement("li");
+        empty.className = "music-playlist-empty";
+        empty.textContent = "Chưa có link nào. Dán link YouTube để tạo danh sách nghe.";
+        musicPlaylistElement.append(empty);
+        return;
+    }
+
+    musicPlaylist.forEach((track, index) => {
+        const row = document.createElement("li");
+        row.className = `music-track-row${index === currentMusicIndex ? " active" : ""}`;
+        const select = document.createElement("button");
+        select.type = "button";
+        select.className = "music-track-select";
+        select.textContent = track.name;
+        select.title = track.name;
+        select.setAttribute("aria-label", `Phát ${track.name}`);
+        select.addEventListener("click", () => playMusicTrack(index));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "music-track-remove";
+        remove.textContent = "Xóa";
+        remove.setAttribute("aria-label", `Xóa ${track.name} khỏi danh sách`);
+        remove.addEventListener("click", () => removeMusicTrack(index));
+        row.append(select, remove);
+        musicPlaylistElement.append(row);
+    });
+}
+
+function loadMusicTrack(index, autoplay = true) {
+    const track = musicPlaylist[index];
+    if (!track) return false;
+    currentMusicIndex = index;
+    const embedUrl = new URL(track.embedUrl);
+    if (autoplay) embedUrl.searchParams.set("autoplay", "1");
+    musicYouTubeFrame.src = embedUrl.href;
+    musicYouTubeFrame.classList.remove("hidden");
+    musicEmbedEmpty.classList.add("hidden");
+    musicOpenSource.href = track.sourceUrl;
+    musicOpenSource.classList.remove("hidden");
+    musicTrackName.textContent = track.name;
+    musicPlaybackStatus.textContent = autoplay ?
+        "Đang mở trình phát YouTube. Điều khiển phát và âm lượng trong khung video." :
+        "Đã chọn. Bấm nút phát trong khung YouTube để nghe.";
+    musicFeedback.textContent = "";
+    musicFeedback.classList.remove("error");
+    renderMusicPlaylist();
+    return true;
+}
+
+function playMusicTrack(index) {
+    loadMusicTrack(index, true);
+}
+
+function addYouTubeLink(sourceUrl, name) {
+    const parsed = parseYouTubeLink(sourceUrl);
+    if (!parsed) {
+        musicFeedback.textContent = "Link không hợp lệ. Hãy dùng link video hoặc playlist YouTube có HTTPS.";
+        musicFeedback.classList.add("error");
+        return;
+    }
+    const existingIndex = musicPlaylist.findIndex((track) => track.key === parsed.key);
+    if (existingIndex >= 0) {
+        musicLinkInput.value = "";
+        musicLinkName.value = "";
+        playMusicTrack(existingIndex);
+        musicFeedback.textContent = "Link này đã có trong danh sách, đang mở lại.";
+        musicFeedback.classList.remove("error");
+        return;
+    }
+    if (musicPlaylist.length >= 50) {
+        musicFeedback.textContent = "Danh sách phát tối đa 50 link.";
+        musicFeedback.classList.add("error");
+        return;
+    }
+    const title = name.trim().slice(0, 100) || parsed.defaultName;
+    musicPlaylist.push({ ...parsed, name: title, sourceUrl });
+    const saved = saveYouTubePlaylist();
+    musicLinkInput.value = "";
+    musicLinkName.value = "";
+    playMusicTrack(musicPlaylist.length - 1);
+    if (!saved) musicFeedback.classList.add("error");
+}
+
+function removeMusicTrack(index) {
+    if (!musicPlaylist[index]) return;
+    musicPlaylist.splice(index, 1);
+    if (currentMusicIndex === index) {
+        musicYouTubeFrame.src = "about:blank";
+        musicYouTubeFrame.classList.add("hidden");
+        musicEmbedEmpty.classList.remove("hidden");
+        musicOpenSource.classList.add("hidden");
+        currentMusicIndex = -1;
+        musicTrackName.textContent = "Chưa chọn bài hát";
+        musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
+    } else if (index < currentMusicIndex) {
+        currentMusicIndex -= 1;
+    }
+    saveYouTubePlaylist();
+    renderMusicPlaylist();
+}
+
+function skipMusicTrack(direction) {
+    if (musicPlaylist.length < 2 || currentMusicIndex < 0) return;
+    const nextIndex = (currentMusicIndex + direction + musicPlaylist.length) % musicPlaylist.length;
+    playMusicTrack(nextIndex);
+}
+
+document.getElementById("music-open-btn").addEventListener("click", () => {
+    musicModal.classList.remove("hidden");
+});
+document.getElementById("music-close-btn").addEventListener("click", () => {
+    musicModal.classList.add("hidden");
+});
+musicModal.addEventListener("click", (event) => {
+    if (event.target === musicModal) musicModal.classList.add("hidden");
+});
+musicLinkForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    addYouTubeLink(musicLinkInput.value.trim(), musicLinkName.value);
+});
+musicPreviousButton.addEventListener("click", () => {
+    skipMusicTrack(-1);
+});
+musicStopButton.addEventListener("click", () => {
+    musicYouTubeFrame.src = "about:blank";
+    musicYouTubeFrame.classList.add("hidden");
+    musicEmbedEmpty.classList.remove("hidden");
+    musicPlaybackStatus.textContent = "Đã dừng. Chọn link trong danh sách để nghe tiếp.";
+});
+musicNextButton.addEventListener("click", () => skipMusicTrack(1));
 
 async function restoreSession() {
     if (!accessToken) return;
