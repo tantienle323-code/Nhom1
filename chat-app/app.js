@@ -1,4 +1,4 @@
-const API_BASE = window.CHAT_API_URL || `${location.protocol === "https:" ? "https" : "http"}://${location.hostname || "127.0.0.1"}:8000`;
+const API_BASE = window.CHAT_API_URL || `${location.protocol === "https:" ? "https" : "http"}://${location.hostname || "127.0.0.1"}:8080`;
 const WS_BASE = window.CHAT_WS_URL || `${API_BASE.startsWith("https:") ? "wss" : "ws"}://${new URL(API_BASE).host}/ws`;
 const API_URL = `${API_BASE}/api`;
 const TOKEN_KEY = "chat_access_token";
@@ -91,7 +91,9 @@ function formatApiError(detail) {
 async function apiFetch(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-    if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+    }
 
     const response = await fetch(`${API_URL}${path}`, { ...options, headers });
     const data = await response.json().catch(() => ({}));
@@ -107,7 +109,7 @@ function setAuthenticated(username, token, isAdmin) {
     accessToken = token;
     localStorage.setItem(TOKEN_KEY, token);
     loadYouTubePlaylist(username);
-    adminLink.classList.toggle("hidden", !isAdmin);
+    if (adminLink) adminLink.classList.toggle("hidden", !isAdmin);
     loginScreen.classList.add("hidden");
     chatScreen.classList.remove("hidden");
     loadUsersList();
@@ -119,16 +121,18 @@ function showLogin() {
 }
 
 function signOut(reload = true) {
-    musicYouTubeFrame.src = "about:blank";
-    musicYouTubeFrame.classList.add("hidden");
-    musicEmbedEmpty.classList.remove("hidden");
-    musicOpenSource.classList.add("hidden");
-    musicModal.classList.add("hidden");
+    if (musicYouTubeFrame) {
+        musicYouTubeFrame.src = "about:blank";
+        musicYouTubeFrame.classList.add("hidden");
+    }
+    if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
+    if (musicOpenSource) musicOpenSource.classList.add("hidden");
+    if (musicModal) musicModal.classList.add("hidden");
     musicPlaylist = [];
     currentMusicIndex = -1;
     renderMusicPlaylist();
-    musicTrackName.textContent = "Chưa chọn bài hát";
-    musicPlaybackStatus.textContent = "Dán link YouTube để bắt đầu.";
+    if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
+    if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Dán link YouTube để bắt đầu.";
     accessToken = "";
     currentUsername = "";
     localStorage.removeItem(TOKEN_KEY);
@@ -141,58 +145,68 @@ function signOut(reload = true) {
     else showLogin();
 }
 
-tabLoginBtn.addEventListener("click", () => {
-    isRegisterMode = false;
-    tabLoginBtn.classList.add("active");
-    tabRegisterBtn.classList.remove("active");
-    confirmPasswordInput.classList.add("hidden");
-    confirmPasswordInput.required = false;
-    passwordInput.autocomplete = "current-password";
-    authSubmitBtn.innerText = "ĐĂNG NHẬP";
-});
+if (tabLoginBtn) {
+    tabLoginBtn.addEventListener("click", () => {
+        isRegisterMode = false;
+        tabLoginBtn.classList.add("active");
+        if (tabRegisterBtn) tabRegisterBtn.classList.remove("active");
+        if (confirmPasswordInput) {
+            confirmPasswordInput.classList.add("hidden");
+            confirmPasswordInput.required = false;
+        }
+        if (passwordInput) passwordInput.autocomplete = "current-password";
+        if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG NHẬP";
+    });
+}
 
-tabRegisterBtn.addEventListener("click", () => {
-    isRegisterMode = true;
-    tabRegisterBtn.classList.add("active");
-    tabLoginBtn.classList.remove("active");
-    confirmPasswordInput.classList.remove("hidden");
-    confirmPasswordInput.required = true;
-    passwordInput.autocomplete = "new-password";
-    authSubmitBtn.innerText = "ĐĂNG KÝ";
-});
+if (tabRegisterBtn) {
+    tabRegisterBtn.addEventListener("click", () => {
+        isRegisterMode = true;
+        tabRegisterBtn.classList.add("active");
+        if (tabLoginBtn) tabLoginBtn.classList.remove("active");
+        if (confirmPasswordInput) {
+            confirmPasswordInput.classList.remove("hidden");
+            confirmPasswordInput.required = true;
+        }
+        if (passwordInput) passwordInput.autocomplete = "new-password";
+        if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG KÝ";
+    });
+}
 
-authForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const username = usernameInput.value.trim();
-    const password = passwordInput.value;
+if (authForm) {
+    authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
 
-    try {
-        if (isRegisterMode) {
-            if (password !== confirmPasswordInput.value) {
-                alert("Mật khẩu xác nhận không khớp.");
+        try {
+            if (isRegisterMode) {
+                if (password !== confirmPasswordInput.value) {
+                    alert("Mật khẩu xác nhận không khớp.");
+                    return;
+                }
+                await apiFetch("/register", {
+                    method: "POST",
+                    body: JSON.stringify({ username, password }),
+                });
+                alert("Đăng ký thành công. Hãy đăng nhập để tiếp tục.");
+                if (tabLoginBtn) tabLoginBtn.click();
+                passwordInput.value = "";
+                confirmPasswordInput.value = "";
                 return;
             }
-            await apiFetch("/register", {
+
+            const result = await apiFetch("/login", {
                 method: "POST",
                 body: JSON.stringify({ username, password }),
             });
-            alert("Đăng ký thành công. Hãy đăng nhập để tiếp tục.");
-            tabLoginBtn.click();
+            setAuthenticated(result.username, result.access_token, result.is_admin);
             passwordInput.value = "";
-            confirmPasswordInput.value = "";
-            return;
+        } catch (error) {
+            alert(error.message || "Không thể kết nối Backend.");
         }
-
-        const result = await apiFetch("/login", {
-            method: "POST",
-            body: JSON.stringify({ username, password }),
-        });
-        setAuthenticated(result.username, result.access_token, result.is_admin);
-        passwordInput.value = "";
-    } catch (error) {
-        alert(error.message || "Không thể kết nối Backend.");
-    }
-});
+    });
+}
 
 function getPrivateRoomId(usernameA, usernameB) {
     const [first, second] = [usernameA, usernameB].sort();
@@ -209,7 +223,8 @@ function safeAvatarUrl(value) {
 }
 
 function renderUsersList() {
-    const filter = userSearch.value.trim().toLocaleLowerCase();
+    if (!usersList) return;
+    const filter = userSearch ? userSearch.value.trim().toLocaleLowerCase() : "";
     usersList.replaceChildren();
     for (const user of users.filter((item) =>
         item.username !== currentUsername && item.username.toLocaleLowerCase().includes(filter)
@@ -260,7 +275,7 @@ async function loadUsersList() {
 function setPresence(username, isOnline) {
     if (isOnline) onlineUsers.add(username);
     else onlineUsers.delete(username);
-    if (username === currentTargetUser) {
+    if (username === currentTargetUser && headerStatus) {
         headerStatus.textContent = isOnline ? "trực tuyến" : "ngoại tuyến";
         headerStatus.classList.toggle("is-online", isOnline);
     }
@@ -268,8 +283,8 @@ function setPresence(username, isOnline) {
 
 async function switchPrivateChat(targetUser, avatar) {
     currentTargetUser = targetUser;
-    worldOpenButton.disabled = false;
-    worldModal.classList.add("hidden");
+    if (worldOpenButton) worldOpenButton.disabled = false;
+    if (worldModal) worldModal.classList.add("hidden");
     clearMemorySource();
     if (socket) {
         const oldSocket = socket;
@@ -277,11 +292,13 @@ async function switchPrivateChat(targetUser, avatar) {
         oldSocket.close();
     }
     currentRoom = getPrivateRoomId(currentUsername, targetUser);
-    headerName.textContent = targetUser;
-    headerAvatar.src = safeAvatarUrl(avatar);
-    headerStatus.textContent = "đang kết nối...";
-    headerStatus.classList.remove("is-online");
-    chatLayout.classList.add("mobile-chat-open");
+    if (headerName) headerName.textContent = targetUser;
+    if (headerAvatar) headerAvatar.src = safeAvatarUrl(avatar);
+    if (headerStatus) {
+        headerStatus.textContent = "đang kết nối...";
+        headerStatus.classList.remove("is-online");
+    }
+    if (chatLayout) chatLayout.classList.add("mobile-chat-open");
     renderUsersList();
 
     try {
@@ -293,6 +310,7 @@ async function switchPrivateChat(targetUser, avatar) {
 }
 
 async function loadHistory(room) {
+    if (!messagesContainer) return;
     messagesContainer.replaceChildren();
     const history = await apiFetch(`/messages/${encodeURIComponent(room)}`);
     if (!history.length) {
@@ -311,7 +329,7 @@ function connectWebSocket(room, username) {
     const activeSocket = new WebSocket(endpoint, [`bearer.${accessToken}`, "chat"]);
     socket = activeSocket;
     activeSocket.onopen = () => {
-        if (socket === activeSocket) {
+        if (socket === activeSocket && headerStatus) {
             headerStatus.textContent = "ngoại tuyến";
             headerStatus.classList.remove("is-online");
         }
@@ -343,7 +361,7 @@ function connectWebSocket(room, username) {
         } else {
             renderMessage(data);
             scrollToBottom();
-            if (!worldModal.classList.contains("hidden")) refreshWorld();
+            if (worldModal && !worldModal.classList.contains("hidden")) refreshWorld();
         }
     };
     activeSocket.onclose = (event) => {
@@ -356,11 +374,12 @@ function connectWebSocket(room, username) {
         }
     };
     activeSocket.onerror = () => {
-        if (socket === activeSocket) headerStatus.textContent = "mất kết nối";
+        if (socket === activeSocket && headerStatus) headerStatus.textContent = "mất kết nối";
     };
 }
 
 function renderMessage(message) {
+    if (!messagesContainer) return;
     if (message._id && document.getElementById(`msg-${message._id}`)) return;
     messagesContainer.querySelector(".tg-empty-notice")?.remove();
     const item = document.createElement("div");
@@ -370,9 +389,36 @@ function renderMessage(message) {
 
     const content = document.createElement("div");
     content.className = "content";
-    content.textContent = message.is_deleted ? "Tin nhắn đã được thu hồi" :
-        `${message.content || ""}${message.is_edited ? " (đã sửa)" : ""}`;
-    if (message.is_deleted) content.classList.add("deleted");
+
+    const textVal = message.content || "";
+    if (message.is_deleted) {
+        content.textContent = "Tin nhắn đã được thu hồi";
+        content.classList.add("deleted");
+    } else if (textVal.startsWith("/uploads/")) {
+        const fullUrl = `${API_BASE}${textVal}`;
+        if (textVal.match(/\.(jpeg|jpg|gif|png|webp)$/i)) {
+            const img = document.createElement("img");
+            img.src = fullUrl;
+            img.style.maxWidth = "260px";
+            img.style.borderRadius = "8px";
+            img.style.marginTop = "4px";
+            img.style.display = "block";
+            content.append(img);
+        } else if (textVal.match(/\.(mp4|webm|ogg)$/i)) {
+            const video = document.createElement("video");
+            video.src = fullUrl;
+            video.controls = true;
+            video.style.maxWidth = "260px";
+            video.style.borderRadius = "8px";
+            video.style.marginTop = "4px";
+            video.style.display = "block";
+            content.append(video);
+        } else {
+            content.textContent = textVal;
+        }
+    } else {
+        content.textContent = `${textVal}${message.is_edited ? " (đã sửa)" : ""}`;
+    }
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -382,16 +428,19 @@ function renderMessage(message) {
     if (message._id && !message.is_deleted) {
         const actions = document.createElement("div");
         actions.className = "msg-actions";
-        if (isSent) {
+        if (isSent && !textVal.startsWith("/uploads/")) {
             const edit = document.createElement("button");
             edit.type = "button";
             edit.textContent = "Sửa";
             edit.addEventListener("click", () => editMessage(message._id, content.textContent));
+            actions.append(edit);
+        }
+        if (isSent) {
             const remove = document.createElement("button");
             remove.type = "button";
             remove.textContent = "Thu hồi";
             remove.addEventListener("click", () => deleteMessage(message._id));
-            actions.append(edit, remove);
+            actions.append(remove);
         }
         const remember = document.createElement("button");
         remember.type = "button";
@@ -406,28 +455,30 @@ function renderMessage(message) {
 
 function clearMemorySource() {
     selectedMemoryMessageId = null;
-    worldSourceText.textContent = "";
-    worldSourcePreview.classList.add("hidden");
+    if (worldSourceText) worldSourceText.textContent = "";
+    if (worldSourcePreview) worldSourcePreview.classList.add("hidden");
 }
 
 async function openWorld(message = null) {
     if (!currentTargetUser) return;
-    worldMemoryForm.reset();
-    worldFeedback.textContent = "";
-    worldFeedback.classList.remove("error");
+    if (worldMemoryForm) worldMemoryForm.reset();
+    if (worldFeedback) {
+        worldFeedback.textContent = "";
+        worldFeedback.classList.remove("error");
+    }
     clearMemorySource();
     if (message?._id) {
         selectedMemoryMessageId = message._id;
-        worldSourceText.textContent = message.content || "";
-        worldSourcePreview.classList.remove("hidden");
+        if (worldSourceText) worldSourceText.textContent = message.content || "";
+        if (worldSourcePreview) worldSourcePreview.classList.remove("hidden");
     }
-    worldModal.classList.remove("hidden");
+    if (worldModal) worldModal.classList.remove("hidden");
     await refreshWorld();
 }
 
 async function refreshWorld() {
     const targetUser = currentTargetUser;
-    if (!targetUser) return;
+    if (!targetUser || !worldFeedback) return;
     worldFeedback.textContent = "Đang tải thế giới...";
     worldFeedback.classList.remove("error");
     try {
@@ -459,6 +510,7 @@ async function refreshWorld() {
 }
 
 function renderWorldMemories(memories, truncated) {
+    if (!worldMemories) return;
     worldMemories.replaceChildren();
     if (!memories.length) {
         const empty = document.createElement("p");
@@ -508,43 +560,56 @@ function renderWorldMemories(memories, truncated) {
     }
 }
 
-worldOpenButton.addEventListener("click", () => openWorld());
-document.getElementById("world-close-btn").addEventListener("click", () => {
-    worldModal.classList.add("hidden");
-});
-worldModal.addEventListener("click", (event) => {
-    if (event.target === worldModal) worldModal.classList.add("hidden");
-});
-document.getElementById("world-clear-source-btn").addEventListener("click", clearMemorySource);
-worldMemoryForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const targetUser = currentTargetUser;
-    const saveButton = document.getElementById("world-memory-save-btn");
-    const payload = {
-        title: worldMemoryTitle.value.trim(),
-        note: worldMemoryNote.value.trim(),
-        message_id: selectedMemoryMessageId,
-    };
-    saveButton.disabled = true;
-    worldFeedback.textContent = "Đang lưu kỷ niệm...";
-    worldFeedback.classList.remove("error");
-    try {
-        await apiFetch(`/world/${encodeURIComponent(targetUser)}/memories`, {
-            method: "POST",
-            body: JSON.stringify(payload),
-        });
-        if (targetUser !== currentTargetUser) return;
-        worldMemoryForm.reset();
-        clearMemorySource();
-        worldFeedback.textContent = "Đã lưu kỷ niệm vào thế giới chung.";
-        await refreshWorld();
-    } catch (error) {
-        worldFeedback.textContent = error.message || "Không thể lưu kỷ niệm.";
-        worldFeedback.classList.add("error");
-    } finally {
-        saveButton.disabled = false;
-    }
-});
+if (worldOpenButton) worldOpenButton.addEventListener("click", () => openWorld());
+const worldCloseBtn = document.getElementById("world-close-btn");
+if (worldCloseBtn) {
+    worldCloseBtn.addEventListener("click", () => {
+        if (worldModal) worldModal.classList.add("hidden");
+    });
+}
+if (worldModal) {
+    worldModal.addEventListener("click", (event) => {
+        if (event.target === worldModal) worldModal.classList.add("hidden");
+    });
+}
+const clearSourceBtn = document.getElementById("world-clear-source-btn");
+if (clearSourceBtn) clearSourceBtn.addEventListener("click", clearMemorySource);
+
+if (worldMemoryForm) {
+    worldMemoryForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const targetUser = currentTargetUser;
+        const saveButton = document.getElementById("world-memory-save-btn");
+        const payload = {
+            title: worldMemoryTitle.value.trim(),
+            note: worldMemoryNote.value.trim(),
+            message_id: selectedMemoryMessageId,
+        };
+        if (saveButton) saveButton.disabled = true;
+        if (worldFeedback) {
+            worldFeedback.textContent = "Đang lưu kỷ niệm...";
+            worldFeedback.classList.remove("error");
+        }
+        try {
+            await apiFetch(`/world/${encodeURIComponent(targetUser)}/memories`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            });
+            if (targetUser !== currentTargetUser) return;
+            worldMemoryForm.reset();
+            clearMemorySource();
+            if (worldFeedback) worldFeedback.textContent = "Đã lưu kỷ niệm vào thế giới chung.";
+            await refreshWorld();
+        } catch (error) {
+            if (worldFeedback) {
+                worldFeedback.textContent = error.message || "Không thể lưu kỷ niệm.";
+                worldFeedback.classList.add("error");
+            }
+        } finally {
+            if (saveButton) saveButton.disabled = false;
+        }
+    });
+}
 
 async function deleteWorldMemory(memoryId) {
     if (!confirm("Xóa kỷ niệm này khỏi thế giới chung?")) return;
@@ -554,8 +619,10 @@ async function deleteWorldMemory(memoryId) {
         });
         await refreshWorld();
     } catch (error) {
-        worldFeedback.textContent = error.message || "Không thể xóa kỷ niệm.";
-        worldFeedback.classList.add("error");
+        if (worldFeedback) {
+            worldFeedback.textContent = error.message || "Không thể xóa kỷ niệm.";
+            worldFeedback.classList.add("error");
+        }
     }
 }
 
@@ -578,7 +645,7 @@ function deleteMessage(messageId) {
 }
 
 function scrollToBottom() {
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
 function sendMessage() {
@@ -591,56 +658,111 @@ function sendMessage() {
     messageInput.value = "";
 }
 
-sendBtn.addEventListener("click", sendMessage);
-messageInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        sendMessage();
-    }
-});
-logoutBtn.addEventListener("click", () => signOut());
-userSearch.addEventListener("input", renderUsersList);
-document.getElementById("back-users-btn").addEventListener("click", () => {
-    chatLayout.classList.remove("mobile-chat-open");
-});
+if (sendBtn) sendBtn.addEventListener("click", sendMessage);
+if (messageInput) {
+    messageInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+}
 
-document.getElementById("my-profile-modal-btn").addEventListener("click", async () => {
-    try {
-        const user = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
-        profileUsername.textContent = user.username;
-        profileAvatarInput.value = user.avatar_url || "";
-        profileBioInput.value = user.bio || "";
-        profileModal.classList.remove("hidden");
-    } catch (error) {
-        alert(error.message || "Không thể tải hồ sơ.");
-    }
-});
+const fileInput = document.getElementById("file-input");
+if (fileInput) {
+    fileInput.addEventListener("change", async function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!currentRoom) return alert("Vui lòng chọn người cần nhắn trước khi đính kèm tệp.");
 
-document.getElementById("close-profile-btn").addEventListener("click", () => {
-    profileModal.classList.add("hidden");
-});
+        const formData = new FormData();
+        formData.append("file", file);
 
-profileModal.addEventListener("click", (event) => {
-    if (event.target === profileModal) profileModal.classList.add("hidden");
-});
+        try {
+            const response = await fetch(`${API_URL}/upload`, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${accessToken}`
+                },
+                body: formData
+            });
 
-document.getElementById("save-profile-btn").addEventListener("click", async () => {
-    try {
-        await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`, {
-            method: "PUT",
-            body: JSON.stringify({
-                avatar_url: profileAvatarInput.value.trim(),
-                bio: profileBioInput.value.trim(),
-            }),
-        });
-        profileModal.classList.add("hidden");
-        await loadUsersList();
-        const myProfile = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
-        if (currentTargetUser === currentUsername) headerAvatar.src = safeAvatarUrl(myProfile.avatar_url);
-    } catch (error) {
-        alert(error.message || "Không thể lưu hồ sơ.");
-    }
-});
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.detail || "Không thể tải tệp lên.");
+            }
+
+            const data = await response.json();
+            if (socket?.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "chat", content: data.url }));
+            }
+            fileInput.value = "";
+        } catch (error) {
+            alert("Lỗi upload: " + error.message);
+        }
+    });
+}
+
+if (logoutBtn) logoutBtn.addEventListener("click", () => signOut());
+if (userSearch) userSearch.addEventListener("input", renderUsersList);
+
+const backUsersBtn = document.getElementById("back-users-btn");
+if (backUsersBtn) {
+    backUsersBtn.addEventListener("click", () => {
+        if (chatLayout) chatLayout.classList.remove("mobile-chat-open");
+    });
+}
+
+const myProfileBtn = document.getElementById("my-profile-modal-btn");
+if (myProfileBtn) {
+    myProfileBtn.addEventListener("click", async () => {
+        try {
+            const user = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+            if (profileUsername) profileUsername.textContent = user.username;
+            if (profileAvatarInput) profileAvatarInput.value = user.avatar_url || "";
+            if (profileBioInput) profileBioInput.value = user.bio || "";
+            if (profileModal) profileModal.classList.remove("hidden");
+        } catch (error) {
+            alert(error.message || "Không thể tải hồ sơ.");
+        }
+    });
+}
+
+const closeProfileBtn = document.getElementById("close-profile-btn");
+if (closeProfileBtn) {
+    closeProfileBtn.addEventListener("click", () => {
+        if (profileModal) profileModal.classList.add("hidden");
+    });
+}
+
+if (profileModal) {
+    profileModal.addEventListener("click", (event) => {
+        if (event.target === profileModal) profileModal.classList.add("hidden");
+    });
+}
+
+const saveProfileBtn = document.getElementById("save-profile-btn");
+if (saveProfileBtn) {
+    saveProfileBtn.addEventListener("click", async () => {
+        try {
+            await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`, {
+                method: "PUT",
+                body: JSON.stringify({
+                    avatar_url: profileAvatarInput.value.trim(),
+                    bio: profileBioInput.value.trim(),
+                }),
+            });
+            if (profileModal) profileModal.classList.add("hidden");
+            await loadUsersList();
+            const myProfile = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+            if (currentTargetUser === currentUsername && headerAvatar) {
+                headerAvatar.src = safeAvatarUrl(myProfile.avatar_url);
+            }
+        } catch (error) {
+            alert(error.message || "Không thể lưu hồ sơ.");
+        }
+    });
+}
 
 function parseYouTubeLink(value) {
     let url;
@@ -697,23 +819,101 @@ function saveYouTubePlaylist() {
         ));
         return true;
     } catch (error) {
-        musicFeedback.textContent = error.message || "Không thể lưu danh sách link trong trình duyệt.";
-        musicFeedback.classList.add("error");
+        if (musicFeedback) {
+            musicFeedback.textContent = error.message || "Không thể lưu danh sách link trong trình duyệt.";
+            musicFeedback.classList.add("error");
+        }
         return false;
     }
+}
+
+function renderMusicPlaylist() {
+    if (!musicPlaylistElement) return;
+    musicPlaylistElement.replaceChildren();
+    if (musicTrackCount) musicTrackCount.textContent = `${musicPlaylist.length} bài`;
+    if (!musicPlaylist.length) {
+        const empty = document.createElement("p");
+        empty.className = "music-empty";
+        empty.textContent = "Chưa có bài hát nào được lưu.";
+        musicPlaylistElement.append(empty);
+        return;
+    }
+    musicPlaylist.forEach((item, index) => {
+        const card = document.createElement("div");
+        card.className = `music-item${index === currentMusicIndex ? " active" : ""}`;
+        card.addEventListener("click", () => playMusicTrack(index));
+
+        const info = document.createElement("div");
+        info.className = "info";
+        const title = document.createElement("h5");
+        title.textContent = item.name;
+        info.append(title);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "✕";
+        removeBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            removeMusicTrack(index);
+        });
+
+        card.append(info, removeBtn);
+        musicPlaylistElement.append(card);
+    });
+}
+
+function playMusicTrack(index) {
+    if (index < 0 || index >= musicPlaylist.length) return;
+    currentMusicIndex = index;
+    const track = musicPlaylist[index];
+    if (musicYouTubeFrame) {
+        musicYouTubeFrame.src = track.embedUrl;
+        musicYouTubeFrame.classList.remove("hidden");
+    }
+    if (musicEmbedEmpty) musicEmbedEmpty.classList.add("hidden");
+    if (musicOpenSource) {
+        musicOpenSource.href = track.sourceUrl;
+        musicOpenSource.classList.remove("hidden");
+    }
+    if (musicTrackName) musicTrackName.textContent = track.name;
+    if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Đang phát qua YouTube...";
+    renderMusicPlaylist();
+}
+
+function removeMusicTrack(index) {
+    musicPlaylist.splice(index, 1);
+    if (currentMusicIndex === index) {
+        currentMusicIndex = -1;
+        if (musicYouTubeFrame) {
+            musicYouTubeFrame.src = "about:blank";
+            musicYouTubeFrame.classList.add("hidden");
+        }
+        if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
+        if (musicOpenSource) musicOpenSource.classList.add("hidden");
+        if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
+        if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
+    } else if (currentMusicIndex > index) {
+        currentMusicIndex--;
+    }
+    saveYouTubePlaylist();
+    renderMusicPlaylist();
 }
 
 function loadYouTubePlaylist(username) {
     musicPlaylist = [];
     currentMusicIndex = -1;
-    musicYouTubeFrame.src = "about:blank";
-    musicYouTubeFrame.classList.add("hidden");
-    musicEmbedEmpty.classList.remove("hidden");
-    musicOpenSource.classList.add("hidden");
-    musicTrackName.textContent = "Chưa chọn bài hát";
-    musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
-    musicFeedback.textContent = "";
-    musicFeedback.classList.remove("error");
+    if (musicYouTubeFrame) {
+        musicYouTubeFrame.src = "about:blank";
+        musicYouTubeFrame.classList.add("hidden");
+    }
+    if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
+    if (musicOpenSource) musicOpenSource.classList.add("hidden");
+    if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
+    if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
+    if (musicFeedback) {
+        musicFeedback.textContent = "";
+        musicFeedback.classList.remove("error");
+    }
     try {
         const stored = JSON.parse(localStorage.getItem(musicStorageKey(username)) || "[]");
         if (!Array.isArray(stored)) throw new TypeError("Danh sách nhạc đã lưu không hợp lệ.");
@@ -722,159 +922,85 @@ function loadYouTubePlaylist(username) {
             const parsed = parseYouTubeLink(entry.sourceUrl);
             if (parsed) musicPlaylist.push({ ...parsed, name: entry.name, sourceUrl: entry.sourceUrl });
         }
-    } catch (error) {
-        musicFeedback.textContent = error.message || "Không thể đọc danh sách link đã lưu.";
-        musicFeedback.classList.add("error");
+    } catch (err) {
+        console.error("Lỗi tải playlist YouTube:", err);
     }
     renderMusicPlaylist();
 }
 
-function renderMusicPlaylist() {
-    musicPlaylistElement.replaceChildren();
-    musicTrackCount.textContent = `${musicPlaylist.length} bài`;
-    musicPreviousButton.disabled = musicPlaylist.length < 2 || currentMusicIndex < 0;
-    musicStopButton.disabled = currentMusicIndex < 0;
-    musicNextButton.disabled = musicPlaylist.length < 2 || currentMusicIndex < 0;
-    if (!musicPlaylist.length) {
-        const empty = document.createElement("li");
-        empty.className = "music-playlist-empty";
-        empty.textContent = "Chưa có link nào. Dán link YouTube để tạo danh sách nghe.";
-        musicPlaylistElement.append(empty);
-        return;
-    }
-
-    musicPlaylist.forEach((track, index) => {
-        const row = document.createElement("li");
-        row.className = `music-track-row${index === currentMusicIndex ? " active" : ""}`;
-        const select = document.createElement("button");
-        select.type = "button";
-        select.className = "music-track-select";
-        select.textContent = track.name;
-        select.title = track.name;
-        select.setAttribute("aria-label", `Phát ${track.name}`);
-        select.addEventListener("click", () => playMusicTrack(index));
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "music-track-remove";
-        remove.textContent = "Xóa";
-        remove.setAttribute("aria-label", `Xóa ${track.name} khỏi danh sách`);
-        remove.addEventListener("click", () => removeMusicTrack(index));
-        row.append(select, remove);
-        musicPlaylistElement.append(row);
+if (musicLinkForm) {
+    musicLinkForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const url = musicLinkInput.value.trim();
+        const name = musicLinkName.value.trim();
+        const parsed = parseYouTubeLink(url);
+        if (!parsed) {
+            alert("Đường dẫn YouTube không hợp lệ.");
+            return;
+        }
+        const trackName = name || parsed.defaultName;
+        musicPlaylist.unshift({ ...parsed, name: trackName, sourceUrl: url });
+        saveYouTubePlaylist();
+        musicLinkInput.value = "";
+        musicLinkName.value = "";
+        playMusicTrack(0);
     });
 }
 
-function loadMusicTrack(index, autoplay = true) {
-    const track = musicPlaylist[index];
-    if (!track) return false;
-    currentMusicIndex = index;
-    const embedUrl = new URL(track.embedUrl);
-    if (autoplay) embedUrl.searchParams.set("autoplay", "1");
-    musicYouTubeFrame.src = embedUrl.href;
-    musicYouTubeFrame.classList.remove("hidden");
-    musicEmbedEmpty.classList.add("hidden");
-    musicOpenSource.href = track.sourceUrl;
-    musicOpenSource.classList.remove("hidden");
-    musicTrackName.textContent = track.name;
-    musicPlaybackStatus.textContent = autoplay ?
-        "Đang mở trình phát YouTube. Điều khiển phát và âm lượng trong khung video." :
-        "Đã chọn. Bấm nút phát trong khung YouTube để nghe.";
-    musicFeedback.textContent = "";
-    musicFeedback.classList.remove("error");
-    renderMusicPlaylist();
-    return true;
+if (musicPreviousButton) {
+    musicPreviousButton.addEventListener("click", () => {
+        if (currentMusicIndex > 0) playMusicTrack(currentMusicIndex - 1);
+    });
 }
 
-function playMusicTrack(index) {
-    loadMusicTrack(index, true);
+if (musicNextButton) {
+    musicNextButton.addEventListener("click", () => {
+        if (currentMusicIndex < musicPlaylist.length - 1) playMusicTrack(currentMusicIndex + 1);
+    });
 }
 
-function addYouTubeLink(sourceUrl, name) {
-    const parsed = parseYouTubeLink(sourceUrl);
-    if (!parsed) {
-        musicFeedback.textContent = "Link không hợp lệ. Hãy dùng link video hoặc playlist YouTube có HTTPS.";
-        musicFeedback.classList.add("error");
-        return;
-    }
-    const existingIndex = musicPlaylist.findIndex((track) => track.key === parsed.key);
-    if (existingIndex >= 0) {
-        musicLinkInput.value = "";
-        musicLinkName.value = "";
-        playMusicTrack(existingIndex);
-        musicFeedback.textContent = "Link này đã có trong danh sách, đang mở lại.";
-        musicFeedback.classList.remove("error");
-        return;
-    }
-    if (musicPlaylist.length >= 50) {
-        musicFeedback.textContent = "Danh sách phát tối đa 50 link.";
-        musicFeedback.classList.add("error");
-        return;
-    }
-    const title = name.trim().slice(0, 100) || parsed.defaultName;
-    musicPlaylist.push({ ...parsed, name: title, sourceUrl });
-    const saved = saveYouTubePlaylist();
-    musicLinkInput.value = "";
-    musicLinkName.value = "";
-    playMusicTrack(musicPlaylist.length - 1);
-    if (!saved) musicFeedback.classList.add("error");
-}
-
-function removeMusicTrack(index) {
-    if (!musicPlaylist[index]) return;
-    musicPlaylist.splice(index, 1);
-    if (currentMusicIndex === index) {
-        musicYouTubeFrame.src = "about:blank";
-        musicYouTubeFrame.classList.add("hidden");
-        musicEmbedEmpty.classList.remove("hidden");
-        musicOpenSource.classList.add("hidden");
+if (musicStopButton) {
+    musicStopButton.addEventListener("click", () => {
         currentMusicIndex = -1;
-        musicTrackName.textContent = "Chưa chọn bài hát";
-        musicPlaybackStatus.textContent = "Chọn link đã lưu hoặc dán link mới.";
-    } else if (index < currentMusicIndex) {
-        currentMusicIndex -= 1;
-    }
-    saveYouTubePlaylist();
-    renderMusicPlaylist();
+        if (musicYouTubeFrame) {
+            musicYouTubeFrame.src = "about:blank";
+            musicYouTubeFrame.classList.add("hidden");
+        }
+        if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
+        if (musicOpenSource) musicOpenSource.classList.add("hidden");
+        if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
+        if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Đã dừng phát nhạc.";
+        renderMusicPlaylist();
+    });
 }
 
-function skipMusicTrack(direction) {
-    if (musicPlaylist.length < 2 || currentMusicIndex < 0) return;
-    const nextIndex = (currentMusicIndex + direction + musicPlaylist.length) % musicPlaylist.length;
-    playMusicTrack(nextIndex);
+const openMusicBtn = document.getElementById("music-open-btn");
+if (openMusicBtn) {
+    openMusicBtn.addEventListener("click", () => {
+        if (musicModal) musicModal.classList.remove("hidden");
+    });
 }
 
-document.getElementById("music-open-btn").addEventListener("click", () => {
-    musicModal.classList.remove("hidden");
-});
-document.getElementById("music-close-btn").addEventListener("click", () => {
-    musicModal.classList.add("hidden");
-});
-musicModal.addEventListener("click", (event) => {
-    if (event.target === musicModal) musicModal.classList.add("hidden");
-});
-musicLinkForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    addYouTubeLink(musicLinkInput.value.trim(), musicLinkName.value);
-});
-musicPreviousButton.addEventListener("click", () => {
-    skipMusicTrack(-1);
-});
-musicStopButton.addEventListener("click", () => {
-    musicYouTubeFrame.src = "about:blank";
-    musicYouTubeFrame.classList.add("hidden");
-    musicEmbedEmpty.classList.remove("hidden");
-    musicPlaybackStatus.textContent = "Đã dừng. Chọn link trong danh sách để nghe tiếp.";
-});
-musicNextButton.addEventListener("click", () => skipMusicTrack(1));
+const closeMusicBtn = document.getElementById("music-close-btn");
+if (closeMusicBtn) {
+    closeMusicBtn.addEventListener("click", () => {
+        if (musicModal) musicModal.classList.add("hidden");
+    });
+}
 
-async function restoreSession() {
-    if (!accessToken) return;
-    try {
-        const user = await apiFetch("/me");
+if (musicModal) {
+    musicModal.addEventListener("click", (e) => {
+        if (e.target === musicModal) musicModal.classList.add("hidden");
+    });
+}
+
+// Kiểm tra phiên đăng nhập hiện tại khi khởi chạy ứng dụng
+if (accessToken) {
+    apiFetch("/profile/me").then(user => {
         setAuthenticated(user.username, accessToken, user.is_admin);
-    } catch {
+    }).catch(() => {
         signOut(false);
-    }
+    });
+} else {
+    showLogin();
 }
-
-restoreSession();

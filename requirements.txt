@@ -4,7 +4,7 @@ anyio==4.15.1
 bcrypt==5.0.0
 certifi==2026.7.22
 click==8.5.0
-contourpy==1.4.0
+contourpy
 cycler==0.12.1
 dnspython==2.8.0
 fastapi==0.142.4
@@ -15,7 +15,7 @@ idna==3.20
 kiwisolver==1.5.1
 matplotlib==3.11.2
 motor==3.7.1
-numpy==2.5.3
+numpy
 opencv-python==5.0.0.93
 opentelemetry-api==1.45.1
 packaging==26.3
@@ -28,7 +28,7 @@ pyparsing==3.3.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
 PyYAML==6.0.3
-scipy==1.18.1
+scipy
 six==1.17.0
 starlette==1.7.0
 typing-inspection==0.4.4

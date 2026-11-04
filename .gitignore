@@ -1,1 +1,6 @@
 backend/.env.local
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python

@@ -66,6 +66,10 @@
             </div>
 
             <div class="tg-chat-footer">
+                <!-- THÊM Ô ẨN VÀ NÚT CHỌN TỆP (ẢNH/VIDEO) -->
+                <input type="file" id="file-input" accept="image/*,video/*" style="display: none;" />
+                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh hoặc video" onclick="document.getElementById('file-input').click()">📎</button>
+                
                 <input type="text" id="message-input" placeholder="Viết tin nhắn..." />
                 <button id="send-btn" class="tg-send-btn">✈️</button>
             </div>
@@ -178,5 +182,25 @@
     </div>
 
     <script src="app.js"></script>
+    <div class="tg-sidebar-header">
+    <h3>Trò chuyện</h3>
+    <button id="open-create-group-btn" class="tg-btn-icon" title="Tạo nhóm mới">➕</button>
+</div>
+    <div id="group-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Tạo nhóm chat mới</h3>
+        <input type="text" id="group-name-input" placeholder="Nhập tên nhóm..." />
+        
+        <h4>Chọn thành viên:</h4>
+        <div id="group-members-select" class="members-select-list">
+            <!-- Danh sách người dùng sẽ được render ở đây -->
+        </div>
+
+        <div class="modal-actions">
+            <button id="cancel-group-btn" class="btn-secondary">Hủy</button>
+            <button id="submit-group-btn" class="btn-primary">Tạo nhóm</button>
+        </div>
+    </div>
+</div>
 </body>
 </html>

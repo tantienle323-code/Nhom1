@@ -21,6 +21,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from starlette.websockets import WebSocketDisconnected
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Cho phép tất cả các nguồn truy cập
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 from database import (
     message_collection,
@@ -28,6 +40,47 @@ from database import (
     world_game_collection,
     world_memory_collection,
 )
+import os
+import uuid
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# 1. KHỞI TẠO APP TRƯỚC HẾT
+app = FastAPI()
+
+# 2. CẤU HÌNH MIDDLEWARE
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 3. TẠO THƯ MỤC VÀ MOUNT UPLOADS
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# 4. KHAI BÁO ROUTE UPLOAD
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ!")
+
+    file_ext = os.path.splitext(file.filename)[1]
+    filename = f"{uuid.uuid4()}{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    with open(file_path, "wb") as buffer:
+        buffer.write(await file.read())
+
+    return {
+        "url": f"/uploads/{filename}",
+        "type": "image" if file.content_type.startswith("image") else "video"
+    }
 
 logger = logging.getLogger(__name__)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
@@ -1399,3 +1452,70 @@ async def websocket_endpoint(
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+from pydantic import BaseModel
+from typing import List, Optional
+
+# 1. Schema cho Tạo nhóm
+class GroupCreateSchema(BaseModel):
+    name: str
+    members: List[str]  # Danh sách username các thành viên được mời
+
+# 2. API Tạo nhóm mới
+@app.post("/api/groups")
+async def create_group(
+    data: GroupCreateSchema,
+    current_user: Annotated[str, Depends(get_current_username)]
+):
+    group_name = data.name.strip()
+    if not group_name:
+        raise HTTPException(status_code=400, detail="Tên nhóm không được để trống!")
+    
+    # Đảm bảo người tạo nhóm luôn có trong danh sách thành viên
+    members = list(set(data.members + [current_user]))
+    if len(members) < 2:
+        raise HTTPException(status_code=400, detail="Nhóm phải có ít nhất 2 thành viên!")
+
+    group_id = f"group_{uuid.uuid4().hex[:12]}"
+    group_doc = {
+        "_id": group_id,
+        "name": group_name,
+        "created_by": current_user,
+        "members": members,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+    }
+
+    # Lưu nhóm vào Database (MongoDB collection 'groups')
+    await db["groups"].insert_one(group_doc)
+    return {"id": group_id, "name": group_name, "members": members}
+
+# 3. API Lấy danh sách nhóm người dùng tham gia
+@app.get("/api/groups")
+async def get_my_groups(current_user: Annotated[str, Depends(get_current_username)]):
+    cursor = db["groups"].find({"members": current_user})
+    groups = await cursor.to_list(length=100)
+    
+    result = []
+    for g in groups:
+        result.append({
+            "id": g["_id"],
+            "name": g["name"],
+            "members": g.get("members", []),
+            "created_by": g.get("created_by", "")
+        })
+    return result
+
+# 4. API Lấy lịch sử tin nhắn nhóm
+@app.get("/api/groups/{group_id}/messages")
+async def get_group_messages(
+    group_id: str,
+    current_user: Annotated[str, Depends(get_current_username)]
+):
+    group = await db["groups"].find_one({"_id": group_id, "members": current_user})
+    if not group:
+        raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập nhóm này!")
+    
+    cursor = db["messages"].find({"room_id": group_id}).sort("timestamp", 1)
+    messages = await cursor.to_list(length=200)
+    for m in messages:
+        m["_id"] = str(m["_id"])
+    return messages
