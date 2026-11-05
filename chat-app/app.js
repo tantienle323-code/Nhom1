@@ -11,6 +11,7 @@ let currentRoom = "";
 let accessToken = localStorage.getItem(TOKEN_KEY) || "";
 let isRegisterMode = false;
 let users = [];
+let groups = [];
 let selectedMemoryMessageId = null;
 const onlineUsers = new Set();
 
@@ -31,6 +32,13 @@ const messagesContainer = document.getElementById("messages-container");
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
 const usersList = document.getElementById("users-list");
+const groupsList = document.getElementById("groups-list");
+const groupModal = document.getElementById("group-modal");
+const groupNameInput = document.getElementById("group-name-input");
+const groupMembersSelect = document.getElementById("group-members-select");
+const createGroupButton = document.getElementById("open-create-group-btn");
+const submitGroupButton = document.getElementById("submit-group-btn");
+const cancelGroupButton = document.getElementById("cancel-group-btn");
 const userSearch = document.querySelector(".tg-search-wrapper input");
 const adminLink = document.getElementById("admin-link");
 const chatLayout = document.getElementById("chat-screen");
@@ -104,6 +112,28 @@ async function apiFetch(path, options = {}) {
     return data;
 }
 
+async function loadProtectedMedia(element, url) {
+    try {
+        const response = await fetch(`${API_BASE}${url}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (response.status === 401 && accessToken) signOut(false);
+        if (!response.ok) throw new Error(`Tải tệp thất bại (${response.status}).`);
+        const objectUrl = URL.createObjectURL(await response.blob());
+        const revokeObjectUrl = () => URL.revokeObjectURL(objectUrl);
+        element.addEventListener(element instanceof HTMLVideoElement ? "loadedmetadata" : "load", revokeObjectUrl, { once: true });
+        element.addEventListener("error", revokeObjectUrl, { once: true });
+        if (!element.isConnected) {
+            revokeObjectUrl();
+            return;
+        }
+        element.src = objectUrl;
+    } catch (error) {
+        console.error("Không thể tải tệp trong cuộc trò chuyện:", error);
+        if (element instanceof HTMLImageElement) element.alt = "Không thể tải ảnh đính kèm.";
+    }
+}
+
 function setAuthenticated(username, token, isAdmin) {
     currentUsername = username;
     accessToken = token;
@@ -113,6 +143,7 @@ function setAuthenticated(username, token, isAdmin) {
     loginScreen.classList.add("hidden");
     chatScreen.classList.remove("hidden");
     loadUsersList();
+    loadGroupsList();
 }
 
 function showLogin() {
@@ -135,6 +166,10 @@ function signOut(reload = true) {
     if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Dán link YouTube để bắt đầu.";
     accessToken = "";
     currentUsername = "";
+    currentTargetUser = "";
+    currentRoom = "";
+    groups = [];
+    if (groupsList) groupsList.replaceChildren();
     localStorage.removeItem(TOKEN_KEY);
     if (socket) {
         const oldSocket = socket;
@@ -251,6 +286,52 @@ function renderUsersList() {
     }
 }
 
+function renderGroupsList() {
+    if (!groupsList) return;
+    groupsList.replaceChildren();
+    if (!groups.length) {
+        const empty = document.createElement("li");
+        empty.className = "tg-empty-notice";
+        empty.textContent = "Chưa tham gia nhóm nào";
+        groupsList.append(empty);
+        return;
+    }
+    for (const group of groups) {
+        const item = document.createElement("li");
+        item.className = `tg-chat-item${currentRoom === group.id ? " active" : ""}`;
+        item.addEventListener("click", () => switchGroupChat(group));
+        const avatar = document.createElement("span");
+        avatar.className = "tg-group-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.textContent = "👥";
+        const info = document.createElement("div");
+        info.className = "info";
+        const name = document.createElement("h4");
+        name.textContent = group.name;
+        const detail = document.createElement("p");
+        detail.textContent = `${group.members.length} thành viên`;
+        info.append(name, detail);
+        item.append(avatar, info);
+        groupsList.append(item);
+    }
+}
+
+function renderGroupMemberOptions() {
+    if (!groupMembersSelect) return;
+    groupMembersSelect.replaceChildren();
+    for (const user of users) {
+        const label = document.createElement("label");
+        label.className = "group-member-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = user.username;
+        const username = document.createElement("span");
+        username.textContent = user.username;
+        label.append(checkbox, username);
+        groupMembersSelect.append(label);
+    }
+}
+
 async function loadUsersList() {
     try {
         const usernames = await apiFetch("/users");
@@ -266,10 +347,116 @@ async function loadUsersList() {
             }));
         users = profiles;
         renderUsersList();
+        renderGroupMemberOptions();
     } catch (error) {
         console.error("Không thể tải danh sách người dùng:", error);
         alert(error.message || "Không thể tải danh sách người dùng.");
     }
+}
+
+async function loadGroupsList() {
+    const username = currentUsername;
+    try {
+        const loadedGroups = await apiFetch("/groups");
+        if (currentUsername !== username) return;
+        groups = loadedGroups;
+        renderGroupsList();
+    } catch (error) {
+        console.error("Không thể tải danh sách nhóm:", error);
+        alert(error.message || "Không thể tải danh sách nhóm.");
+    }
+}
+
+async function switchGroupChat(group) {
+    currentTargetUser = "";
+    currentRoom = group.id;
+    if (worldOpenButton) worldOpenButton.disabled = true;
+    if (worldModal) worldModal.classList.add("hidden");
+    clearMemorySource();
+    if (socket) {
+        const oldSocket = socket;
+        socket = null;
+        oldSocket.close();
+    }
+    if (headerName) headerName.textContent = group.name;
+    if (headerAvatar) headerAvatar.src = DEFAULT_AVATAR;
+    if (headerStatus) {
+        headerStatus.textContent = `${group.members.length} thành viên`;
+        headerStatus.classList.remove("is-online");
+    }
+    if (chatLayout) chatLayout.classList.add("mobile-chat-open");
+    renderUsersList();
+    renderGroupsList();
+    try {
+        const room = group.id;
+        messagesContainer.replaceChildren();
+        const history = await apiFetch(`/groups/${encodeURIComponent(room)}/messages`);
+        if (currentRoom !== room) return;
+        if (!history.length) {
+            const notice = document.createElement("div");
+            notice.className = "tg-empty-notice";
+            notice.textContent = "Nhóm chưa có tin nhắn. Hãy bắt đầu trò chuyện!";
+            messagesContainer.append(notice);
+        } else {
+            for (const message of history) renderMessage(message);
+        }
+        scrollToBottom();
+        connectWebSocket(room, currentUsername);
+    } catch (error) {
+        alert(error.message || "Không thể mở nhóm chat.");
+    }
+}
+
+if (createGroupButton) {
+    createGroupButton.addEventListener("click", () => {
+        if (groupNameInput) groupNameInput.value = "";
+        if (groupMembersSelect) {
+            groupMembersSelect.querySelectorAll("input[type=checkbox]").forEach((checkbox) => {
+                checkbox.checked = false;
+            });
+        }
+        if (groupModal) groupModal.classList.remove("hidden");
+    });
+}
+
+if (cancelGroupButton) {
+    cancelGroupButton.addEventListener("click", () => {
+        if (groupModal) groupModal.classList.add("hidden");
+    });
+}
+
+if (groupModal) {
+    groupModal.addEventListener("click", (event) => {
+        if (event.target === groupModal) groupModal.classList.add("hidden");
+    });
+}
+
+if (submitGroupButton) {
+    submitGroupButton.addEventListener("click", async () => {
+        const name = groupNameInput.value.trim();
+        const selectedMembers = [...groupMembersSelect.querySelectorAll("input:checked")]
+            .map((checkbox) => checkbox.value);
+        if (!name) return alert("Vui lòng nhập tên nhóm.");
+        if (!selectedMembers.length) return alert("Hãy chọn ít nhất một thành viên khác.");
+        if (selectedMembers.length > 49) return alert("Mỗi nhóm có thể mời tối đa 49 thành viên khác.");
+        submitGroupButton.disabled = true;
+        try {
+            const group = await apiFetch("/groups", {
+                method: "POST",
+                body: JSON.stringify({ name, members: selectedMembers }),
+            });
+            if (groupModal) groupModal.classList.add("hidden");
+            await loadGroupsList();
+            await switchGroupChat({
+                ...group,
+                members: group.members || [...selectedMembers, currentUsername],
+            });
+        } catch (error) {
+            alert(error.message || "Không thể tạo nhóm.");
+        } finally {
+            submitGroupButton.disabled = false;
+        }
+    });
 }
 
 function setPresence(username, isOnline) {
@@ -300,6 +487,7 @@ async function switchPrivateChat(targetUser, avatar) {
     }
     if (chatLayout) chatLayout.classList.add("mobile-chat-open");
     renderUsersList();
+    renderGroupsList();
 
     try {
         await loadHistory(currentRoom);
@@ -313,6 +501,7 @@ async function loadHistory(room) {
     if (!messagesContainer) return;
     messagesContainer.replaceChildren();
     const history = await apiFetch(`/messages/${encodeURIComponent(room)}`);
+    if (currentRoom !== room) return;
     if (!history.length) {
         const notice = document.createElement("div");
         notice.className = "tg-empty-notice";
@@ -330,7 +519,7 @@ function connectWebSocket(room, username) {
     socket = activeSocket;
     activeSocket.onopen = () => {
         if (socket === activeSocket && headerStatus) {
-            headerStatus.textContent = "ngoại tuyến";
+            headerStatus.textContent = currentRoom.startsWith("group_") ? "đã kết nối" : "ngoại tuyến";
             headerStatus.classList.remove("is-online");
         }
     };
@@ -387,6 +576,13 @@ function renderMessage(message) {
     item.className = `msg ${isSent ? "sent" : "received"}`;
     if (message._id) item.id = `msg-${message._id}`;
 
+    if (currentRoom.startsWith("group_") && !isSent) {
+        const sender = document.createElement("div");
+        sender.className = "tg-group-sender";
+        sender.textContent = message.sender || "Thành viên";
+        item.append(sender);
+    }
+
     const content = document.createElement("div");
     content.className = "content";
 
@@ -395,24 +591,25 @@ function renderMessage(message) {
         content.textContent = "Tin nhắn đã được thu hồi";
         content.classList.add("deleted");
     } else if (textVal.startsWith("/uploads/")) {
-        const fullUrl = `${API_BASE}${textVal}`;
         if (textVal.match(/\.(jpeg|jpg|gif|png|webp)$/i)) {
             const img = document.createElement("img");
-            img.src = fullUrl;
+                img.alt = "Ảnh được chia sẻ trong cuộc trò chuyện";
             img.style.maxWidth = "260px";
             img.style.borderRadius = "8px";
             img.style.marginTop = "4px";
             img.style.display = "block";
             content.append(img);
-        } else if (textVal.match(/\.(mp4|webm|ogg)$/i)) {
-            const video = document.createElement("video");
-            video.src = fullUrl;
+                loadProtectedMedia(img, textVal);
+            } else if (textVal.match(/\.(mp4|webm|ogg)$/i)) {
+                const video = document.createElement("video");
             video.controls = true;
-            video.style.maxWidth = "260px";
-            video.style.borderRadius = "8px";
-            video.style.marginTop = "4px";
-            video.style.display = "block";
-            content.append(video);
+                video.preload = "metadata";
+                video.style.maxWidth = "260px";
+                video.style.borderRadius = "8px";
+                video.style.marginTop = "4px";
+                video.style.display = "block";
+                content.append(video);
+                loadProtectedMedia(video, textVal);
         } else {
             content.textContent = textVal;
         }
@@ -442,12 +639,14 @@ function renderMessage(message) {
             remove.addEventListener("click", () => deleteMessage(message._id));
             actions.append(remove);
         }
-        const remember = document.createElement("button");
-        remember.type = "button";
-        remember.className = "save-memory-action";
-        remember.textContent = "🌱 Lưu kỷ niệm";
-        remember.addEventListener("click", () => openWorld(message));
-        actions.append(remember);
+        if (!currentRoom.startsWith("group_")) {
+            const remember = document.createElement("button");
+            remember.type = "button";
+            remember.className = "save-memory-action";
+            remember.textContent = "🌱 Lưu kỷ niệm";
+            remember.addEventListener("click", () => openWorld(message));
+            actions.append(remember);
+        }
         item.append(actions);
     }
     messagesContainer.append(item);
@@ -674,31 +873,33 @@ if (fileInput) {
         const file = e.target.files[0];
         if (!file) return;
         if (!currentRoom) return alert("Vui lòng chọn người cần nhắn trước khi đính kèm tệp.");
+        if (file.size > 20 * 1024 * 1024) {
+            fileInput.value = "";
+            return alert("Tệp vượt quá giới hạn 20 MB.");
+        }
+        if (socket?.readyState !== WebSocket.OPEN) {
+            fileInput.value = "";
+            return alert("Đang kết nối lại. Vui lòng thử gửi lại.");
+        }
 
         const formData = new FormData();
         formData.append("file", file);
+        const uploadRoom = currentRoom;
+        const uploadSocket = socket;
 
         try {
-            const response = await fetch(`${API_URL}/upload`, {
+            const data = await apiFetch("/upload", {
                 method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${accessToken}`
-                },
                 body: formData
             });
-
-            if (!response.ok) {
-                const errData = await response.json().catch(() => ({}));
-                throw new Error(errData.detail || "Không thể tải tệp lên.");
+            if (uploadRoom !== currentRoom || uploadSocket !== socket || uploadSocket.readyState !== WebSocket.OPEN) {
+                throw new Error("Bạn đã chuyển cuộc trò chuyện hoặc bị mất kết nối; tệp chưa được gửi.");
             }
-
-            const data = await response.json();
-            if (socket?.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "chat", content: data.url }));
-            }
+            uploadSocket.send(JSON.stringify({ type: "chat", content: data.url }));
             fileInput.value = "";
         } catch (error) {
-            alert("Lỗi upload: " + error.message);
+            fileInput.value = "";
+            alert("Lỗi gửi tệp: " + error.message);
         }
     });
 }

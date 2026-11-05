@@ -6,3 +6,4 @@ pydantic
 bcrypt
 python-dotenv
 pymongo
+python-multipart

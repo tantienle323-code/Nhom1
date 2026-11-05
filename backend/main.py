@@ -8,90 +8,48 @@ import logging
 import os
 import re
 import secrets
+import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
 import bcrypt
 from bson import ObjectId
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from starlette.websockets import WebSocketDisconnected
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # Cho phép tất cả các nguồn truy cập
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 from database import (
+    database,
     message_collection,
     user_collection,
     world_game_collection,
     world_memory_collection,
 )
-import os
-import uuid
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-
-# 1. KHỞI TẠO APP TRƯỚC HẾT
-app = FastAPI()
-
-# 2. CẤU HÌNH MIDDLEWARE
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 3. TẠO THƯ MỤC VÀ MOUNT UPLOADS
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-
-# 4. KHAI BÁO ROUTE UPLOAD
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ!")
-
-    file_ext = os.path.splitext(file.filename)[1]
-    filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
-
-    with open(file_path, "wb") as buffer:
-        buffer.write(await file.read())
-
-    return {
-        "url": f"/uploads/{filename}",
-        "type": "image" if file.content_type.startswith("image") else "video"
-    }
 
 logger = logging.getLogger(__name__)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-AUTH_SECRET = os.getenv("AUTH_SECRET") or secrets.token_urlsafe(48)
+AUTH_SECRET = os.getenv("AUTH_SECRET", "")
 TOKEN_TTL_SECONDS = 12 * 60 * 60
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "chat-app"
+UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 bearer_scheme = HTTPBearer(auto_error=False)
 
-if not os.getenv("AUTH_SECRET"):
+if not AUTH_SECRET:
+    if os.getenv("ENVIRONMENT", "").lower() == "production":
+        raise RuntimeError("AUTH_SECRET must be configured before production startup.")
+    AUTH_SECRET = secrets.token_urlsafe(48)
     logger.warning("AUTH_SECRET is not configured; sessions will expire when the server restarts.")
+elif len(AUTH_SECRET.encode("utf-8")) < 32:
+    raise RuntimeError("AUTH_SECRET must be at least 32 bytes.")
 
 if bool(ADMIN_USERNAME) != bool(ADMIN_PASSWORD):
     raise RuntimeError("Set both ADMIN_USERNAME and ADMIN_PASSWORD to enable the admin account.")
@@ -246,6 +204,27 @@ class WorldMemorySchema(BaseModel):
         return value.strip()
 
 
+class GroupCreateSchema(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    members: list[str] = Field(min_length=1, max_length=49)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Tên nhóm không được để trống.")
+        return value
+
+    @field_validator("members")
+    @classmethod
+    def validate_members(cls, values: list[str]) -> list[str]:
+        for username in values:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{3,30}", username):
+                raise ValueError("Danh sách thành viên có tài khoản không hợp lệ.")
+        return values
+
+
 WORLD_STAGES = (
     (0, "Bến gặp gỡ", "Một thế giới nhỏ bắt đầu từ cuộc trò chuyện của hai bạn.", "🏝️"),
     (10, "Con đường chung", "Mỗi lần ghé thăm lại mở thêm một lối đi.", "🛤️"),
@@ -309,6 +288,13 @@ def private_room_id(username_a: str, username_b: str) -> str:
 
 
 async def is_room_member(room: str, username: str) -> bool:
+    if room.startswith("group_"):
+        try:
+            return await database["groups"].find_one(
+                {"_id": room, "members": username}, {"_id": 1}
+            ) is not None
+        except PyMongoError as exc:
+            raise HTTPException(status_code=503, detail="Không thể xác thực thành viên nhóm.") from exc
     try:
         users = await user_collection.find(
             {"username": {"$ne": username}}, {"username": 1, "_id": 0}
@@ -1451,71 +1437,177 @@ async def websocket_endpoint(
                 logger.debug("Could not broadcast a presence update for %s.", username)
 
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
-from pydantic import BaseModel
-from typing import List, Optional
-
-# 1. Schema cho Tạo nhóm
-class GroupCreateSchema(BaseModel):
-    name: str
-    members: List[str]  # Danh sách username các thành viên được mời
-
-# 2. API Tạo nhóm mới
 @app.post("/api/groups")
 async def create_group(
     data: GroupCreateSchema,
-    current_user: Annotated[str, Depends(get_current_username)]
+    current_user: Annotated[str, Depends(get_current_username)],
 ):
-    group_name = data.name.strip()
-    if not group_name:
-        raise HTTPException(status_code=400, detail="Tên nhóm không được để trống!")
-    
-    # Đảm bảo người tạo nhóm luôn có trong danh sách thành viên
-    members = list(set(data.members + [current_user]))
+    members = list(dict.fromkeys([*data.members, current_user]))
     if len(members) < 2:
-        raise HTTPException(status_code=400, detail="Nhóm phải có ít nhất 2 thành viên!")
+        raise HTTPException(status_code=400, detail="Nhóm phải có ít nhất 2 thành viên.")
+    try:
+        registered_members = await user_collection.find(
+            {"username": {"$in": members}}, {"username": 1, "_id": 0}
+        ).to_list(length=50)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể xác thực thành viên nhóm.") from exc
+    registered_usernames = {user["username"] for user in registered_members}
+    if registered_usernames != set(members):
+        raise HTTPException(status_code=400, detail="Một hoặc nhiều tài khoản không tồn tại.")
 
-    group_id = f"group_{uuid.uuid4().hex[:12]}"
+    group_id = f"group_{uuid.uuid4().hex}"
     group_doc = {
         "_id": group_id,
-        "name": group_name,
+        "name": data.name,
         "created_by": current_user,
         "members": members,
-        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
     }
+    try:
+        await database["groups"].insert_one(group_doc)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tạo nhóm.") from exc
+    return {"id": group_id, "name": data.name, "members": members}
 
-    # Lưu nhóm vào Database (MongoDB collection 'groups')
-    await db["groups"].insert_one(group_doc)
-    return {"id": group_id, "name": group_name, "members": members}
 
-# 3. API Lấy danh sách nhóm người dùng tham gia
 @app.get("/api/groups")
 async def get_my_groups(current_user: Annotated[str, Depends(get_current_username)]):
-    cursor = db["groups"].find({"members": current_user})
-    groups = await cursor.to_list(length=100)
-    
-    result = []
-    for g in groups:
-        result.append({
-            "id": g["_id"],
-            "name": g["name"],
-            "members": g.get("members", []),
-            "created_by": g.get("created_by", "")
-        })
-    return result
+    try:
+        cursor = database["groups"].find({"members": current_user}).sort("created_at", -1)
+        groups = await cursor.to_list(length=100)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải danh sách nhóm.") from exc
+    return [
+        {
+            "id": group["_id"],
+            "name": group["name"],
+            "members": group.get("members", []),
+            "created_by": group.get("created_by", ""),
+        }
+        for group in groups
+    ]
 
-# 4. API Lấy lịch sử tin nhắn nhóm
+
 @app.get("/api/groups/{group_id}/messages")
 async def get_group_messages(
     group_id: str,
-    current_user: Annotated[str, Depends(get_current_username)]
+    current_user: Annotated[str, Depends(get_current_username)],
 ):
-    group = await db["groups"].find_one({"_id": group_id, "members": current_user})
-    if not group:
-        raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập nhóm này!")
-    
-    cursor = db["messages"].find({"room_id": group_id}).sort("timestamp", 1)
-    messages = await cursor.to_list(length=200)
-    for m in messages:
-        m["_id"] = str(m["_id"])
+    try:
+        group = await database["groups"].find_one({"_id": group_id, "members": current_user})
+        if not group:
+            raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập nhóm này.")
+        cursor = (
+            message_collection.find(
+                {"$or": [{"room": group_id}, {"room_id": group_id}]}
+            )
+            .sort("_id", -1)
+            .limit(200)
+        )
+        messages = await cursor.to_list(length=200)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải tin nhắn nhóm.") from exc
+    for message in messages:
+        message["_id"] = str(message["_id"])
+        message.setdefault("room", group_id)
+    messages.reverse()
     return messages
+
+
+UPLOAD_TYPES = {
+    "image/jpeg": (".jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
+    "image/png": (".png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
+    "image/gif": (".gif", lambda data: data.startswith((b"GIF87a", b"GIF89a"))),
+    "image/webp": (
+        ".webp",
+        lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP",
+    ),
+    "video/mp4": (".mp4", lambda data: len(data) >= 8 and data[4:8] == b"ftyp"),
+    "video/webm": (".webm", lambda data: data.startswith(b"\x1a\x45\xdf\xa3")),
+}
+
+
+@app.post("/api/upload", status_code=201)
+async def upload_file(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    _: Annotated[str, Depends(get_current_username)],
+):
+    temporary_path: Path | None = None
+    try:
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES + 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Tệp vượt quá giới hạn 20 MB.")
+        upload_type = UPLOAD_TYPES.get(file.content_type or "")
+        if not upload_type:
+            raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ.")
+
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        extension, signature_matches = upload_type
+        total_size = 0
+        signature = bytearray()
+        with tempfile.NamedTemporaryFile(dir=UPLOAD_DIR, suffix=".tmp", delete=False) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            while chunk := await file.read(64 * 1024):
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Tệp vượt quá giới hạn 20 MB.")
+                signature.extend(chunk[: max(0, 12 - len(signature))])
+                temporary_file.write(chunk)
+        if not signature or not signature_matches(signature):
+            raise HTTPException(status_code=400, detail="Nội dung tệp không khớp với định dạng đã chọn.")
+        filename = f"{uuid.uuid4().hex}{extension}"
+        os.replace(temporary_path, UPLOAD_DIR / filename)
+        temporary_path = None
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
+        await file.close()
+
+    return {
+        "url": f"/uploads/{filename}",
+        "type": "image" if file.content_type.startswith("image/") else "video",
+    }
+
+
+@app.get("/uploads/{filename}")
+async def get_uploaded_file(
+    filename: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not re.fullmatch(
+        r"(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.(?:jpeg|jpg|png|gif|webp|mp4|webm)",
+        filename,
+    ):
+        raise HTTPException(status_code=404, detail="Không tìm thấy tệp.")
+    file_path = UPLOAD_DIR / filename
+    try:
+        message = await message_collection.find_one(
+            {
+                "content": f"/uploads/{filename}",
+                "$or": [{"room": {"$exists": True}}, {"room_id": {"$exists": True}}],
+            },
+            {"room": 1, "room_id": 1},
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể xác thực quyền xem tệp.") from exc
+    room = message.get("room", message.get("room_id", "")) if message else ""
+    if not message or not await is_room_member(room, username) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Không tìm thấy tệp.")
+    media_type = {
+        ".jpeg": "image/jpeg",
+        ".jpg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+    }[file_path.suffix]
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

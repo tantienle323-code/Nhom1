@@ -1,11 +1,13 @@
 import asyncio
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from pydantic import ValidationError
+from starlette.requests import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
@@ -104,6 +106,266 @@ class PrivateWorldTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(games.documents), 1)
         self.assertEqual(games.documents["match-1"]["room"], "chat_alice_bob")
+
+
+class GroupChatTests(unittest.IsolatedAsyncioTestCase):
+    async def test_group_schema_normalizes_name_and_rejects_invalid_members(self):
+        group = main.GroupCreateSchema(name="  Study group  ", members=["bob"])
+        self.assertEqual(group.name, "Study group")
+        with self.assertRaises(ValidationError):
+            main.GroupCreateSchema(name="   ", members=["bob"])
+        with self.assertRaises(ValidationError):
+            main.GroupCreateSchema(name="Friends", members=["bad username"])
+
+    async def test_group_membership_is_checked_against_group_document(self):
+        class Groups:
+            async def find_one(self, query, projection):
+                return {"_id": query["_id"]} if query["members"] == "alice" else None
+
+        class Database:
+            def __getitem__(self, collection):
+                self.assert_group_collection(collection)
+                return Groups()
+
+            @staticmethod
+            def assert_group_collection(collection):
+                if collection != "groups":
+                    raise AssertionError(collection)
+
+        with patch.object(main, "database", Database()):
+            self.assertTrue(await main.is_room_member("group_123", "alice"))
+            self.assertFalse(await main.is_room_member("group_123", "eve"))
+
+    async def test_create_group_checks_registered_members_and_persists_group(self):
+        inserted = []
+
+        class Cursor:
+            async def to_list(self, length):
+                return [{"username": "alice"}, {"username": "bob"}]
+
+        class Users:
+            def find(self, query, projection):
+                self.query = query
+                return Cursor()
+
+        class Groups:
+            async def insert_one(self, document):
+                inserted.append(document)
+
+        class Database:
+            def __getitem__(self, collection):
+                if collection != "groups":
+                    raise AssertionError(collection)
+                return Groups()
+
+        with patch.object(main, "user_collection", Users()), patch.object(main, "database", Database()):
+            result = await main.create_group(
+                main.GroupCreateSchema(name="Study group", members=["bob", "bob"]),
+                "alice",
+            )
+
+        self.assertEqual(result["members"], ["bob", "alice"])
+        self.assertEqual(len(inserted), 1)
+        self.assertEqual(inserted[0]["name"], "Study group")
+
+    async def test_create_group_rejects_unknown_accounts(self):
+        class Cursor:
+            async def to_list(self, length):
+                return [{"username": "alice"}]
+
+        class Users:
+            def find(self, query, projection):
+                return Cursor()
+
+        with patch.object(main, "user_collection", Users()):
+            with self.assertRaises(HTTPException) as error:
+                await main.create_group(
+                    main.GroupCreateSchema(name="Study group", members=["bob"]),
+                    "alice",
+                )
+        self.assertEqual(error.exception.status_code, 400)
+
+    async def test_group_websocket_persists_and_broadcasts_chat_messages(self):
+        room = "group_123"
+        token = main.create_access_token("alice")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [{"type": "chat", "content": "Hello group"}]
+                self.accepted = False
+
+            async def accept(self, subprotocol):
+                self.accepted = subprotocol == "chat"
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Groups:
+            async def find_one(self, query, projection):
+                return {"_id": room} if query["members"] == "alice" else None
+
+        class Database:
+            def __getitem__(self, collection):
+                if collection != "groups":
+                    raise AssertionError(collection)
+                return Groups()
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "alice"}
+
+        class Messages:
+            def __init__(self):
+                self.inserted = []
+
+            async def insert_one(self, message):
+                self.inserted.append(message)
+                return type("InsertResult", (), {"inserted_id": "message-1"})()
+
+        socket = FakeSocket()
+        messages = Messages()
+        with (
+            patch.object(main, "database", Database()),
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "message_collection", messages),
+            patch.object(main, "manager", main.ConnectionManager()),
+        ):
+            await main.websocket_endpoint(socket, room, "alice")
+
+        self.assertTrue(socket.accepted)
+        self.assertEqual(messages.inserted[0]["room"], room)
+        self.assertEqual(messages.inserted[0]["content"], "Hello group")
+        self.assertTrue(any(event.get("content") == "Hello group" for event in socket.events))
+
+
+class UploadTests(unittest.IsolatedAsyncioTestCase):
+    class FakeUpload:
+        def __init__(self, content, content_type="image/png"):
+            self.content = content
+            self.content_type = content_type
+            self.closed = False
+
+        async def read(self, size):
+            chunk, self.content = self.content[:size], self.content[size:]
+            return chunk
+
+        async def close(self):
+            self.closed = True
+
+    def request(self, headers=None):
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/upload",
+            "headers": headers or [],
+            "query_string": b"",
+            "server": ("test", 8000),
+            "client": ("test", 1234),
+            "scheme": "http",
+            "http_version": "1.1",
+        })
+
+    async def test_upload_saves_content_with_server_selected_extension(self):
+        content = b"\x89PNG\r\n\x1a\nvalid"
+        upload = self.FakeUpload(content)
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(main, "UPLOAD_DIR", Path(directory)):
+                response = await main.upload_file(self.request(), upload, "alice")
+                saved_file = Path(directory) / Path(response["url"]).name
+                self.assertEqual(saved_file.read_bytes(), content)
+                self.assertTrue(saved_file.name.endswith(".png"))
+        self.assertEqual(response["type"], "image")
+        self.assertTrue(upload.closed)
+
+    async def test_upload_rejects_spoofed_content_and_closes_file(self):
+        upload = self.FakeUpload(b"not an image")
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(main, "UPLOAD_DIR", Path(directory)):
+                with self.assertRaises(HTTPException) as error:
+                    await main.upload_file(self.request(), upload, "alice")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertTrue(upload.closed)
+
+    async def test_upload_rejects_oversized_request_before_writing(self):
+        upload = self.FakeUpload(b"")
+        request = self.request([(b"content-length", str(main.MAX_UPLOAD_BYTES + 1024 * 1024 + 1).encode())])
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(main, "UPLOAD_DIR", Path(directory)):
+                with self.assertRaises(HTTPException) as error:
+                    await main.upload_file(request, upload, "alice")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(error.exception.status_code, 413)
+        self.assertTrue(upload.closed)
+
+    async def test_upload_rejects_oversized_file_without_content_length(self):
+        upload = self.FakeUpload(
+            b"\x89PNG\r\n\x1a\n" + b"x" * main.MAX_UPLOAD_BYTES
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(main, "UPLOAD_DIR", Path(directory)):
+                with self.assertRaises(HTTPException) as error:
+                    await main.upload_file(self.request(), upload, "alice")
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(error.exception.status_code, 413)
+        self.assertTrue(upload.closed)
+
+    async def test_uploaded_media_requires_chat_membership(self):
+        filename = f"{'a' * 32}.png"
+
+        class Messages:
+            async def find_one(self, query, projection):
+                self.query = query
+                return {"room": "group_123"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            file_path = Path(directory) / filename
+            file_path.write_bytes(b"png")
+            with (
+                patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "message_collection", Messages()),
+                patch.object(main, "is_room_member", new=AsyncMock(return_value=False)),
+            ):
+                with self.assertRaises(HTTPException) as error:
+                    await main.get_uploaded_file(filename, "outsider")
+        self.assertEqual(error.exception.status_code, 404)
+
+    async def test_uploaded_media_returns_private_no_store_response_for_member(self):
+        filename = f"{'b' * 32}.png"
+
+        class Messages:
+            async def find_one(self, query, projection):
+                return {"room": "group_123"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / filename).write_bytes(b"png")
+            with (
+                patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "message_collection", Messages()),
+                patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            ):
+                response = await main.get_uploaded_file(filename, "alice")
+        self.assertEqual(response.media_type, "image/png")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+
+    async def test_api_routes_are_registered_before_frontend_fallback(self):
+        route_names = [getattr(route, "name", "") for route in main.app.routes]
+        frontend_mount = route_names.index("frontend")
+        route_paths = [getattr(route, "path", "") for route in main.app.routes]
+        self.assertLess(route_paths.index("/api/groups"), frontend_mount)
+        self.assertLess(route_paths.index("/api/upload"), frontend_mount)
+        self.assertLess(route_paths.index("/uploads/{filename}"), frontend_mount)
 
 
 class FakeWebSocket:

@@ -37,8 +37,16 @@
                 <div class="tg-search-wrapper">
                     <input type="text" placeholder="Tìm kiếm..." />
                 </div>
+                <button id="open-create-group-btn" class="tg-btn-icon" type="button" title="Tạo nhóm mới" aria-label="Tạo nhóm mới">＋</button>
             </div>
-            <ul id="users-list" class="tg-chat-list"></ul>
+            <section class="tg-chat-section">
+                <h3 class="tg-chat-section-title">Nhóm của bạn</h3>
+                <ul id="groups-list" class="tg-chat-list tg-groups-list" aria-label="Nhóm chat"></ul>
+            </section>
+            <section class="tg-chat-section tg-users-section">
+                <h3 class="tg-chat-section-title">Trò chuyện riêng</h3>
+                <ul id="users-list" class="tg-chat-list" aria-label="Cuộc trò chuyện riêng"></ul>
+            </section>
         </aside>
 
         <!-- CỘT PHẢI: KHUNG CHAT CHÍNH -->
@@ -182,26 +190,18 @@
         </section>
     </div>
 
-    <script src="app.js"></script>
-    <div class="tg-sidebar-header">
-    <h3>Trò chuyện</h3>
-    <button id="open-create-group-btn" class="tg-btn-icon" title="Tạo nhóm mới">➕</button>
-</div>
-    <div id="group-modal" class="modal hidden">
-    <div class="modal-content">
-        <h3>Tạo nhóm chat mới</h3>
-        <input type="text" id="group-name-input" placeholder="Nhập tên nhóm..." />
-        
-        <h4>Chọn thành viên:</h4>
-        <div id="group-members-select" class="members-select-list">
-            <!-- Danh sách người dùng sẽ được render ở đây -->
-        </div>
-
-        <div class="modal-actions">
-            <button id="cancel-group-btn" class="btn-secondary">Hủy</button>
-            <button id="submit-group-btn" class="btn-primary">Tạo nhóm</button>
-        </div>
+    <div id="group-modal" class="modal-overlay hidden">
+        <section class="tg-modal-card" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
+            <h3 id="group-modal-title">Tạo nhóm chat mới</h3>
+            <input type="text" id="group-name-input" maxlength="80" placeholder="Nhập tên nhóm..." required />
+            <h4>Chọn thành viên (tối đa 49 người):</h4>
+            <div id="group-members-select" class="members-select-list"></div>
+            <div class="tg-modal-actions">
+                <button id="cancel-group-btn" class="btn-cancel" type="button">Hủy</button>
+                <button id="submit-group-btn" class="btn-telegram" type="button">Tạo nhóm</button>
+            </div>
+        </section>
     </div>
-</div>
+    <script src="app.js"></script>
 </body>
 </html>
