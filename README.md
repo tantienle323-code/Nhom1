@@ -21,7 +21,7 @@
    ```
 
 4. Mở `http://127.0.0.1:8000`, đăng nhập admin hoặc đăng ký tài khoản chat mới. Trang quản trị dùng đường dẫn `/admin.html`.
-5. Trong chat, chọn **Chơi game** để mở Game Center. Có thể chọn Xếp gạch, Cờ caro, Oẳn tù tì hoặc Đấu vui. Hai người chơi đăng nhập bằng hai tài khoản ở hai trình duyệt/thiết bị và cùng nhấn **Tìm trận**; caro chơi lần lượt, oẳn tù tì chơi BO3, đấu vui là trò phản xạ với nhân vật hoạt hình (không có đánh nhau thật). Xếp gạch hỗ trợ phím mũi tên và Space; trên điện thoại có nút cảm ứng.
+5. Trong chat, chọn **Chơi game** để mở Game Center ở tab mới; có thể chọn Xếp gạch, Cờ caro, Oẳn tù tì hoặc Đấu vui mà vẫn giữ tab chat và nhạc YouTube đang phát. Trong trình phát nhạc cũng có nút **Chơi game ở tab mới**. Hai người chơi đăng nhập bằng hai tài khoản ở hai trình duyệt/thiết bị và cùng nhấn **Tìm trận**; caro chơi lần lượt, oẳn tù tì chơi BO3, đấu vui là trò phản xạ với nhân vật hoạt hình (không có đánh nhau thật). Xếp gạch hỗ trợ phím mũi tên và Space; trên điện thoại có nút cảm ứng.
 6. Trong một cuộc trò chuyện riêng, chọn **Thế giới đôi** để xem địa danh và tiến trình chung. Tin nhắn và trận game đã hoàn thành góp điểm mở cột mốc; kỷ niệm chỉ được lưu khi người dùng chủ động ghim từ tin nhắn hoặc tự nhập. Mỗi người chỉ có thể xóa kỷ niệm do mình tạo.
 7. Chọn **🎵 Nhạc** trong chat để mở trình phát cá nhân. Dán link HTTPS của video hoặc playlist YouTube, thêm vào danh sách và phát trong khung YouTube. Danh sách link lưu riêng trong trình duyệt theo tài khoản; video được phát từ YouTube, không tải lên máy chủ chat hay tự chia sẻ với người đang trò chuyện.
 

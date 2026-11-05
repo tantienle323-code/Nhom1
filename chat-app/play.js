@@ -24,6 +24,8 @@ const gameInfo = {
     },
 };
 const choiceLabels = { rock: "✊", paper: "✋", scissors: "✌️" };
+const choiceNames = { rock: "Búa", paper: "Bao", scissors: "Kéo" };
+const rpsRoundResultDuration = 3000;
 
 const playerNameLabel = document.getElementById("player-name");
 const boardPlayerName = document.getElementById("board-player-name");
@@ -37,6 +39,7 @@ const overlay = document.getElementById("game-overlay");
 const overlayIcon = document.getElementById("overlay-icon");
 const overlayTitle = document.getElementById("overlay-title");
 const gameMessage = document.getElementById("game-message");
+const rpsMatchResult = document.getElementById("rps-match-result");
 const findMatchButton = document.getElementById("find-match-btn");
 const gomokuView = document.getElementById("gomoku-view");
 const rpsView = document.getElementById("rps-view");
@@ -44,6 +47,7 @@ const duelView = document.getElementById("duel-view");
 const gomokuBoard = document.getElementById("gomoku-board");
 const turnStatus = document.getElementById("turn-status");
 const rpsStatus = document.getElementById("rps-status");
+const rpsLastRound = document.getElementById("rps-last-round");
 const duelStatus = document.getElementById("duel-status");
 const readyButton = document.getElementById("ready-btn");
 const duelArena = document.getElementById("duel-arena");
@@ -55,7 +59,16 @@ let ownMark = "";
 let currentTurn = false;
 let gameResultReceived = false;
 let choiceSubmitted = false;
+let rpsRoundTimer = null;
+let lastRpsRoundSummary = "";
 const cells = [];
+
+function clearRpsRoundTimer() {
+    if (rpsRoundTimer !== null) {
+        clearTimeout(rpsRoundTimer);
+        rpsRoundTimer = null;
+    }
+}
 
 function showOverlay(title, message, buttonText = "Tìm trận") {
     overlayTitle.textContent = title;
@@ -66,8 +79,13 @@ function showOverlay(title, message, buttonText = "Tìm trận") {
 }
 
 function resetViews() {
+    clearRpsRoundTimer();
+    lastRpsRoundSummary = "";
+    rpsMatchResult.classList.add("hidden");
+    overlayIcon.classList.remove("hidden");
     gomokuView.classList.toggle("hidden", game !== "gomoku");
     rpsView.classList.toggle("hidden", game !== "rps");
+    rpsView.classList.remove("match-ended");
     duelView.classList.toggle("hidden", game !== "duel");
     opponentNameLabel.textContent = "Đang chờ";
     opponentStatus.textContent = "Tìm người chơi để bắt đầu.";
@@ -91,11 +109,22 @@ function resetViews() {
         });
         turnStatus.textContent = "Đang chờ trận...";
     } else if (game === "rps") {
+        rpsLastRound.classList.add("hidden");
+        rpsLastRound.className = "rps-last-round hidden";
+        document.getElementById("rps-last-round-title").textContent = "";
+        document.getElementById("rps-last-opponent-choice").textContent = "?";
+        document.getElementById("rps-last-your-choice").textContent = "?";
+        document.getElementById("rps-last-round-summary").textContent = "";
         document.getElementById("rps-your-choice").textContent = "?";
         document.getElementById("rps-opponent-choice").textContent = "?";
+        document.getElementById("rps-your-choice-name").textContent = "Chưa ra";
+        document.getElementById("rps-opponent-choice-name").textContent = "Chưa ra";
+        document.getElementById("rps-your-side").className = "choice-side";
+        document.getElementById("rps-opponent-side").className = "choice-side";
         document.getElementById("rps-opponent-label").textContent = "Đối thủ";
         document.getElementById("rps-round").textContent = gameInfo.rps.round;
         rpsStatus.textContent = "Chọn một biểu tượng bên dưới.";
+        rpsStatus.className = "stage-status";
     } else if (game === "duel") {
         document.getElementById("duel-round").textContent = gameInfo.duel.round;
         duelStatus.textContent = "Nhấn sẵn sàng, chờ tín hiệu rồi phản xạ!";
@@ -146,8 +175,34 @@ function handleRoundResult(data) {
     if (game === "rps") {
         document.getElementById("rps-your-choice").textContent = choiceLabels[data.your_choice] || "?";
         document.getElementById("rps-opponent-choice").textContent = choiceLabels[data.opponent_choice] || "?";
-        rpsStatus.textContent = data.round_winner === username ? "Bạn thắng vòng này!" :
-            data.round_winner ? `${opponent} thắng vòng này.` : "Hòa vòng này!";
+        const yourChoice = choiceNames[data.your_choice] || "Không rõ";
+        const opponentChoice = choiceNames[data.opponent_choice] || "Không rõ";
+        document.getElementById("rps-your-choice-name").textContent = `Bạn ra: ${yourChoice}`;
+        document.getElementById("rps-opponent-choice-name").textContent = `Đối thủ ra: ${opponentChoice}`;
+        document.getElementById("rps-your-side").className =
+            `choice-side ${data.round_winner === username ? "winner" : data.round_winner ? "loser" : ""}`;
+        document.getElementById("rps-opponent-side").className =
+            `choice-side ${data.round_winner && data.round_winner !== username ? "winner" : data.round_winner ? "loser" : ""}`;
+        const outcome = data.round_winner === username ? "Bạn thắng" :
+            data.round_winner ? `${opponent} thắng` : "Hòa";
+        lastRpsRoundSummary = data.round_winner ?
+            `Vòng ${data.round}: Bạn ra ${yourChoice}, ${opponent} ra ${opponentChoice}. ${outcome}!` :
+            `Vòng ${data.round} hòa: cả hai ra ${yourChoice}.`;
+        document.getElementById("rps-last-round-title").textContent =
+            data.round_winner === username ? `Vòng ${data.round}: BẠN THẮNG!` :
+                data.round_winner ? `Vòng ${data.round}: ${opponent.toUpperCase()} THẮNG!` :
+                    `Vòng ${data.round}: HÒA!`;
+        document.getElementById("rps-last-opponent-choice").textContent =
+            choiceLabels[data.opponent_choice] || "?";
+        document.getElementById("rps-last-your-choice").textContent =
+            choiceLabels[data.your_choice] || "?";
+        document.getElementById("rps-last-round-summary").textContent =
+            `Đối thủ ra ${opponentChoice}  ·  Bạn ra ${yourChoice}`;
+        rpsLastRound.className =
+            `rps-last-round ${data.round_winner === username ? "win" : data.round_winner ? "lose" : "draw"}`;
+        rpsStatus.textContent = lastRpsRoundSummary;
+        rpsStatus.className = `stage-status ${data.round_winner === username ? "rps-round-win" :
+            data.round_winner ? "rps-round-lose" : "rps-round-draw"}`;
         choiceSubmitted = true;
         document.querySelectorAll("[data-choice]").forEach((button) => { button.disabled = true; });
     } else if (game === "duel") {
@@ -178,12 +233,22 @@ function handleEvent(data, activeSocket) {
         overlay.classList.add("hidden");
         if (game === "gomoku") setTurn(data.your_turn);
     } else if (data.type === "round_started") {
-        choiceSubmitted = false;
-        document.getElementById("rps-round").textContent = `VÒNG ${data.round} · THẮNG HAI VÒNG`;
-        document.getElementById("rps-your-choice").textContent = "?";
-        document.getElementById("rps-opponent-choice").textContent = "?";
-        rpsStatus.textContent = "Chọn bí mật — chờ đối thủ chọn.";
-        document.querySelectorAll("[data-choice]").forEach((button) => { button.disabled = false; });
+        clearRpsRoundTimer();
+        rpsRoundTimer = setTimeout(() => {
+            rpsRoundTimer = null;
+            if (gameResultReceived || activeSocket !== socket) return;
+            choiceSubmitted = false;
+            document.getElementById("rps-round").textContent = `VÒNG ${data.round} · THẮNG HAI VÒNG`;
+            document.getElementById("rps-your-choice").textContent = "?";
+            document.getElementById("rps-opponent-choice").textContent = "?";
+            document.getElementById("rps-your-choice-name").textContent = "Chưa ra";
+            document.getElementById("rps-opponent-choice-name").textContent = "Chưa ra";
+            document.getElementById("rps-your-side").className = "choice-side";
+            document.getElementById("rps-opponent-side").className = "choice-side";
+            rpsStatus.textContent = "Chọn bí mật — chờ đối thủ chọn.";
+            rpsStatus.className = "stage-status";
+            document.querySelectorAll("[data-choice]").forEach((button) => { button.disabled = false; });
+        }, rpsRoundResultDuration);
     } else if (data.type === "waiting_choice") {
         choiceSubmitted = true;
         document.querySelectorAll("[data-choice]").forEach((button) => { button.disabled = true; });
@@ -220,6 +285,7 @@ function handleEvent(data, activeSocket) {
         duelArena.classList.add("signal");
         duelStatus.textContent = "TÍN HIỆU! Ai nhấn trước thắng vòng.";
     } else if (data.type === "result") {
+        clearRpsRoundTimer();
         gameResultReceived = true;
         currentTurn = false;
         cells.forEach((cell) => { cell.disabled = true; });
@@ -229,9 +295,27 @@ function handleEvent(data, activeSocket) {
         playerStatus.textContent = data.result === "win" ? "Bạn chiến thắng!" :
             data.result === "draw" ? "Trận đấu hòa." : "Bạn đã thua trận này.";
         connectionStatus.textContent = playerStatus.textContent;
+        if (game === "rps") {
+            document.getElementById("rps-round").textContent = "KẾT THÚC TRẬN";
+            rpsView.classList.add("match-ended");
+            rpsStatus.textContent = lastRpsRoundSummary;
+            rpsStatus.className = "stage-status";
+            rpsMatchResult.className = `rps-match-result ${data.result}`;
+            document.getElementById("rps-match-title").textContent =
+                data.result === "win" ? "Chiến thắng! 🎉" :
+                    data.result === "draw" ? "Trận đấu hòa!" : "Bạn thua trận!";
+            document.getElementById("rps-match-summary").textContent =
+                `Tỷ số: Bạn ${playerScoreLabel.textContent} – ${opponent} ${opponentScoreLabel.textContent}.`;
+            rpsMatchResult.classList.remove("hidden");
+            return;
+        }
+        const resultMessage = data.reason === "opponent_disconnected" ?
+            "Đối thủ đã rời trận." : "Bạn có thể tìm trận mới để chơi tiếp.";
+        const resultTitle = data.result === "win" ? "Chiến thắng! 🎉" :
+            data.result === "draw" ? "Hòa!" : "Kết thúc trận";
         showOverlay(
-            data.result === "win" ? "Chiến thắng! 🎉" : data.result === "draw" ? "Hòa!" : "Kết thúc trận",
-            data.reason === "opponent_disconnected" ? "Đối thủ đã rời trận." : "Bạn có thể tìm trận mới để chơi tiếp.",
+            resultTitle,
+            resultMessage,
             "Tìm trận mới"
         );
     } else if (data.type === "error") {
@@ -284,6 +368,7 @@ function findMatch() {
     };
     activeSocket.onclose = (event) => {
         if (socket !== activeSocket || gameResultReceived) return;
+        clearRpsRoundTimer();
         socket = null;
         if (event.code === 4401) {
             localStorage.removeItem(TOKEN_KEY);
@@ -329,6 +414,8 @@ readyButton.addEventListener("click", () => {
         socket.send(JSON.stringify({ type: "ready" }));
     }
 });
+
+document.getElementById("rps-replay-btn").addEventListener("click", findMatch);
 
 async function initialize() {
     if (!gameInfo[game]) {

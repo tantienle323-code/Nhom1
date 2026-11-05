@@ -52,9 +52,34 @@ button, a { font: inherit; }
 .rps-arena, .duel-arena { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 38px 0 24px; }
 .choice-side { display: grid; min-width: 96px; justify-items: center; gap: 10px; color: #a9bed1; font-size: 12px; }
 .choice-emoji { display: grid; width: 92px; height: 92px; place-items: center; border: 1px solid #31495f; border-radius: 50%; background: #1a2a39; font-size: 42px; }
+.choice-name { min-height: 16px; color: #dce8f4; font-size: 11px; font-weight: 700; text-align: center; }
+.choice-side { transition: opacity .2s, transform .2s; }
+.choice-side.winner .choice-emoji { border-color: #60d4c2; background: #1e3a3b; box-shadow: 0 0 24px #60d4c255; transform: scale(1.08); }
+.choice-side.winner b, .choice-side.winner .choice-name { color: #83dea8; }
+.choice-side.loser { opacity: .48; }
+.rps-last-round { display: grid; gap: 5px; margin: 4px auto 12px; padding: 10px 12px; border: 1px solid #47665d; border-radius: 11px; background: #182b2a; text-align: center; }
+.rps-last-round.hidden { display: none; }
+.rps-last-round > strong { color: #83dea8; font-size: 13px; letter-spacing: .04em; }
+.rps-last-round.lose > strong { color: #ff9a9a; }
+.rps-last-round.draw > strong { color: #f7c96a; }
+.rps-last-round-hands { display: flex; align-items: center; justify-content: center; gap: 18px; }
+.rps-last-round-hands span { font-size: 25px; }
+.rps-last-round-hands b { color: #60d4c2; font-size: 10px; }
+.rps-last-round p { margin: 0; color: #c1ccda; font-size: 10px; }
 .versus { color: #60d4c2; font-size: 12px; font-weight: 900; letter-spacing: .15em; }
 .stage-status { min-height: 24px; color: #a9bed1; font-size: 13px; text-align: center; }
+.stage-status.rps-round-win { color: #83dea8; font-weight: 800; }
+.stage-status.rps-round-lose { color: #ff9a9a; font-weight: 800; }
+.stage-status.rps-round-draw { color: #f7c96a; font-weight: 800; }
+.rps-match-result { margin-top: 16px; padding: 15px; border: 1px solid #39556d; border-radius: 12px; background: #172432; text-align: center; }
+.rps-match-result.hidden { display: none; }
+.rps-match-result h2 { margin: 0; color: #83dea8; font-size: 21px; }
+.rps-match-result.lose h2 { color: #ff9a9a; }
+.rps-match-result.draw h2 { color: #f7c96a; }
+.rps-match-result p { margin: 7px 0 0; color: #a9bed1; font-size: 12px; }
+.rps-match-result .primary-button { max-width: 280px; }
 .choice-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.game-view.match-ended .choice-buttons { display: none; }
 .choice-buttons button { display: grid; min-height: 78px; place-items: center; gap: 4px; border: 1px solid #31495f; border-radius: 10px; background: #1a2a39; color: #eef4fa; cursor: pointer; font-size: 11px; }
 .choice-buttons button span { font-size: 25px; }
 .choice-buttons button:hover:not(:disabled) { border-color: #60d4c2; background: #203849; }
