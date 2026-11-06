@@ -152,6 +152,8 @@ input:focus { border-color: #5288c1; }
 .music-privacy-note { margin: 9px 2px 13px; color: #9894b2; font-size: 10px; line-height: 1.5; }
 .music-embed-wrap { position: relative; display: grid; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; place-items: center; border: 1px solid #393750; border-radius: 12px; background: #10111a; }
 .music-embed-wrap iframe { width: 100%; height: 100%; border: 0; }
+.music-embed-wrap #music-youtube-frame { position: absolute; inset: 0; width: 100%; height: 100%; }
+.music-embed-wrap #music-youtube-player { width: 100%; height: 100%; }
 .music-embed-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; color: #918ca9; font-size: 12px; }
 .music-embed-empty span { text-align: center; }
 .music-current-track { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px; border: 1px solid #393750; border-radius: 13px; background: rgba(15,16,27,.56); }
@@ -159,11 +161,25 @@ input:focus { border-color: #5288c1; }
 .music-current-track > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .music-current-track strong { overflow: hidden; color: #eeeaff; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .music-current-track small { color: #9994b5; font-size: 11px; }
+.music-current-track small.error { color: #ff9a9a; }
 .music-open-source { color: #b6a9f2; font-size: 10px; text-decoration: underline; }
 .music-controls { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 15px 0 22px; }
 .music-controls > button { padding: 8px 13px; border: 1px solid #49445f; border-radius: 9px; background: #28263d; color: #d2cbed; cursor: pointer; font-size: 11px; }
 .music-controls > button:hover:not(:disabled) { background: #383451; color: #e7dcff; }
 .music-controls > button:disabled { cursor: not-allowed; opacity: .35; }
+.music-share-controls { display: grid; gap: 8px; margin: -10px 0 18px; }
+.music-share-controls button { padding: 10px 12px; border: 1px solid #426b62; border-radius: 9px; background: #1d3836; color: #a7f0d7; cursor: pointer; font-size: 11px; font-weight: 700; }
+.music-share-controls button:hover:not(:disabled) { background: #274944; }
+.music-share-controls button:disabled { cursor: not-allowed; opacity: .45; }
+.music-share-controls #music-leave-share-btn { border-color: #5b4854; background: #382832; color: #f0c2d1; }
+.music-share-controls #music-leave-share-btn:hover { background: #49323e; }
+.music-share-controls p { min-height: 14px; color: #a7a1bd; font-size: 10px; line-height: 1.5; text-align: center; }
+.music-invite-banner { position: fixed; right: 18px; bottom: 18px; z-index: 1200; display: flex; width: min(440px, calc(100vw - 28px)); align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid #655996; border-radius: 14px; background: #211f33; box-shadow: 0 14px 45px rgba(0,0,0,.45); }
+.music-invite-banner strong { color: #eeeaff; font-size: 13px; }
+.music-invite-banner p { margin-top: 5px; color: #bdb8d3; font-size: 11px; line-height: 1.4; }
+.music-invite-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.music-invite-actions button { padding: 8px 10px; border: 1px solid #62568f; border-radius: 8px; background: #403668; color: #e2d9ff; cursor: pointer; font-size: 10px; font-weight: 700; }
+.music-invite-actions button:last-child { border-color: #49445f; background: #28263d; color: #d2cbed; }
 .music-game-link { display: block; margin: -10px 0 20px; padding: 10px 12px; border: 1px solid #426b62; border-radius: 9px; background: #1d3836; color: #a7f0d7; font-size: 11px; font-weight: 700; text-align: center; text-decoration: none; }
 .music-game-link:hover { background: #274944; }
 .music-playlist-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 1px solid #343249; }
@@ -201,6 +217,7 @@ input:focus { border-color: #5288c1; }
     .world-modal-card { padding: 22px 16px; }
     .music-modal-card { padding: 22px 16px; }
     .music-controls { flex-wrap: wrap; }
+    .music-invite-banner { right: 10px; bottom: 10px; align-items: flex-start; flex-direction: column; gap: 10px; }
     .world-hero { gap: 13px; }
     .world-landmark { flex-basis: 76px; height: 76px; border-radius: 24px; font-size: 40px; }
     .world-hero h2 { font-size: 21px; }

@@ -1,4 +1,4 @@
-const API_BASE = window.CHAT_API_URL || `${location.protocol === "https:" ? "https" : "http"}://${location.hostname || "127.0.0.1"}:8000`;
+const API_BASE = window.CHAT_API_URL || location.origin;
 const WS_BASE = window.CHAT_WS_URL || `${API_BASE.startsWith("https:") ? "wss" : "ws"}://${new URL(API_BASE).host}/ws`;
 const API_URL = `${API_BASE}/api`;
 const TOKEN_KEY = "chat_access_token";
@@ -70,8 +70,31 @@ const musicEmbedEmpty = document.getElementById("music-embed-empty");
 const musicOpenSource = document.getElementById("music-open-source");
 const musicFeedback = document.getElementById("music-feedback");
 const musicTrackCount = document.getElementById("music-track-count");
+const musicShareButton = document.getElementById("music-share-btn");
+const musicLeaveShareButton = document.getElementById("music-leave-share-btn");
+const musicShareStatus = document.getElementById("music-share-status");
+const musicInviteBanner = document.getElementById("music-invite-banner");
+const musicInviteDescription = document.getElementById("music-invite-description");
+const musicInviteAcceptButton = document.getElementById("music-invite-accept");
+const musicInviteDeclineButton = document.getElementById("music-invite-decline");
 let musicPlaylist = [];
 let currentMusicIndex = -1;
+let currentMusicTrack = null;
+let youtubePlayer = null;
+let youtubePlayerReady = false;
+let youtubePlayerPromise = null;
+let youtubeApiPromise = null;
+let youtubeBufferingTimeoutId = null;
+const YOUTUBE_PLAYER_TIMEOUT_MS = 15000;
+let musicPlaybackError = "";
+let musicSyncActive = false;
+let musicSyncRoom = "";
+let musicSyncLeader = "";
+let pendingMusicInvite = null;
+let outgoingMusicInvite = false;
+let suppressMusicSyncUntil = 0;
+let lastObservedMusicTime = null;
+let lastMusicHeartbeatAt = 0;
 
 function formatApiError(detail) {
     if (typeof detail === "string") return detail;
@@ -152,16 +175,19 @@ function showLogin() {
 }
 
 function signOut(reload = true) {
+    resetMusicSyncSession(true);
     if (musicYouTubeFrame) {
-        musicYouTubeFrame.src = "about:blank";
         musicYouTubeFrame.classList.add("hidden");
     }
+    if (youtubePlayerReady && youtubePlayer) youtubePlayer.stopVideo();
     if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
     if (musicOpenSource) musicOpenSource.classList.add("hidden");
     if (musicModal) musicModal.classList.add("hidden");
     musicPlaylist = [];
     currentMusicIndex = -1;
+    currentMusicTrack = null;
     renderMusicPlaylist();
+    updateMusicShareControls();
     if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
     if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Dán link YouTube để bắt đầu.";
     accessToken = "";
@@ -368,6 +394,9 @@ async function loadGroupsList() {
 }
 
 async function switchGroupChat(group) {
+    resetMusicSyncSession(true);
+    pendingMusicInvite = null;
+    if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
     currentTargetUser = "";
     currentRoom = group.id;
     if (worldOpenButton) worldOpenButton.disabled = true;
@@ -384,6 +413,7 @@ async function switchGroupChat(group) {
         headerStatus.textContent = `${group.members.length} thành viên`;
         headerStatus.classList.remove("is-online");
     }
+    updateMusicShareControls();
     if (chatLayout) chatLayout.classList.add("mobile-chat-open");
     renderUsersList();
     renderGroupsList();
@@ -469,6 +499,9 @@ function setPresence(username, isOnline) {
 }
 
 async function switchPrivateChat(targetUser, avatar) {
+    resetMusicSyncSession(true);
+    pendingMusicInvite = null;
+    if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
     currentTargetUser = targetUser;
     if (worldOpenButton) worldOpenButton.disabled = false;
     if (worldModal) worldModal.classList.add("hidden");
@@ -479,6 +512,7 @@ async function switchPrivateChat(targetUser, avatar) {
         oldSocket.close();
     }
     currentRoom = getPrivateRoomId(currentUsername, targetUser);
+    updateMusicShareControls();
     if (headerName) headerName.textContent = targetUser;
     if (headerAvatar) headerAvatar.src = safeAvatarUrl(avatar);
     if (headerStatus) {
@@ -522,6 +556,7 @@ function connectWebSocket(room, username) {
             headerStatus.textContent = currentRoom.startsWith("group_") ? "đã kết nối" : "ngoại tuyến";
             headerStatus.classList.remove("is-online");
         }
+        updateMusicShareControls();
     };
     activeSocket.onmessage = (event) => {
         let data;
@@ -545,6 +580,8 @@ function connectWebSocket(room, username) {
                 message.querySelector(".content").classList.add("deleted");
                 message.querySelector(".msg-actions")?.remove();
             }
+        } else if (data.type === "music_sync") {
+            handleMusicSyncEvent(data);
         } else if (data.type === "error") {
             alert(data.message);
         } else {
@@ -557,6 +594,8 @@ function connectWebSocket(room, username) {
         if (socket !== activeSocket) return;
         socket = null;
         setPresence(currentTargetUser, false);
+        if (musicSyncRoom === room) resetMusicSyncSession(false);
+        updateMusicShareControls();
         if (event.code === 4401) {
             alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
             signOut(false);
@@ -1005,6 +1044,8 @@ function parseYouTubeLink(value) {
     return {
         embedUrl: embedUrl.href,
         key: `${videoId}:${playlistId}`,
+        videoId,
+        playlistId,
         defaultName: playlistId && !videoId ? "Playlist YouTube" : `YouTube · ${videoId}`,
     };
 }
@@ -1063,32 +1104,498 @@ function renderMusicPlaylist() {
     });
 }
 
-function playMusicTrack(index) {
-    if (index < 0 || index >= musicPlaylist.length) return;
-    currentMusicIndex = index;
-    const track = musicPlaylist[index];
-    if (musicYouTubeFrame) {
-        musicYouTubeFrame.src = track.embedUrl;
-        musicYouTubeFrame.classList.remove("hidden");
+function updateMusicShareControls() {
+    const canShare = Boolean(
+        currentTargetUser &&
+        currentRoom &&
+        !currentRoom.startsWith("group_") &&
+        socket?.readyState === WebSocket.OPEN
+    );
+    if (musicShareButton) {
+        musicShareButton.disabled = !canShare || !currentMusicTrack;
+        musicShareButton.classList.toggle("hidden", musicSyncActive);
     }
+    if (musicLeaveShareButton) musicLeaveShareButton.classList.toggle("hidden", !musicSyncActive);
+    if (!musicShareStatus) return;
+    if (musicSyncActive) {
+        musicShareStatus.textContent = `Đang nghe/xem cùng ${currentTargetUser}. Cả hai đều có thể điều khiển.`;
+    } else if (!canShare) {
+        musicShareStatus.textContent = "Chọn một cuộc trò chuyện riêng để mời đối phương.";
+    } else if (!currentMusicTrack) {
+        musicShareStatus.textContent = "Phát một video YouTube trước khi gửi lời mời.";
+    } else {
+        musicShareStatus.textContent = "Mời đối phương tham gia; họ cần đồng ý trước khi phát.";
+    }
+}
+
+function updateMusicTransportControls() {
+    if (musicStopButton) musicStopButton.disabled = !currentMusicTrack;
+    if (musicPreviousButton) musicPreviousButton.disabled = currentMusicIndex <= 0;
+    if (musicNextButton) musicNextButton.disabled =
+        currentMusicIndex < 0 || currentMusicIndex >= musicPlaylist.length - 1;
+}
+
+function resetMusicSyncSession(notifyPartner = false) {
+    if (notifyPartner && pendingMusicInvite) sendMusicSignal({ action: "decline" });
+    if (notifyPartner && (musicSyncActive || outgoingMusicInvite)) {
+        sendMusicSignal({ action: "leave" });
+    }
+    pendingMusicInvite = null;
+    if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
+    musicSyncActive = false;
+    musicSyncRoom = "";
+    musicSyncLeader = "";
+    outgoingMusicInvite = false;
+    updateMusicShareControls();
+}
+
+function sendMusicSignal(data) {
+    if (socket?.readyState !== WebSocket.OPEN || !currentRoom || currentRoom.startsWith("group_")) return false;
+    socket.send(JSON.stringify({ type: "music_sync", ...data }));
+    return true;
+}
+
+function getMusicSnapshot(action) {
+    let videoId = currentMusicTrack?.videoId || "";
+    if (!videoId && !currentMusicTrack?.playlistId && youtubePlayerReady && youtubePlayer) {
+        videoId = youtubePlayer.getVideoData()?.video_id || "";
+    }
+    const playlistId = currentMusicTrack?.playlistId || "";
+    const playerState = youtubePlayerReady && youtubePlayer ? youtubePlayer.getPlayerState() : -1;
+    const playbackState = action === "invite" ?
+        (playerState === 2 || playerState === 0 ? "paused" : "playing") :
+        (playerState === 0 ? "ended" : playerState === 2 ? "paused" : "playing");
+    const position = youtubePlayerReady && youtubePlayer ?
+        Math.max(0, Math.min(86400, youtubePlayer.getCurrentTime() || 0)) : 0;
+    return {
+        action,
+        video_id: videoId,
+        playlist_id: playlistId,
+        title: currentMusicTrack?.name || "YouTube",
+        position,
+        playback_state: playbackState,
+    };
+}
+
+function sendMusicState() {
+    if (!musicSyncActive || currentRoom !== musicSyncRoom) return;
+    if (sendMusicSignal(getMusicSnapshot("state"))) {
+        musicSyncLeader = currentUsername;
+        lastMusicHeartbeatAt = Date.now();
+    }
+}
+
+function showMusicPlaybackError(message) {
+    musicPlaybackError = message;
+    if (musicPlaybackStatus) {
+        musicPlaybackStatus.textContent = message;
+        musicPlaybackStatus.classList.add("error");
+    }
+    if (musicFeedback) {
+        musicFeedback.textContent = message;
+        musicFeedback.classList.add("error");
+    }
+}
+
+function clearMusicPlaybackError() {
+    musicPlaybackError = "";
+    if (musicPlaybackStatus) musicPlaybackStatus.classList.remove("error");
+    if (musicFeedback) {
+        musicFeedback.textContent = "";
+        musicFeedback.classList.remove("error");
+    }
+}
+
+function setMusicPlaybackStatus(message) {
+    if (!musicPlaybackError && musicPlaybackStatus) musicPlaybackStatus.textContent = message;
+}
+
+function createYouTubePlayerFrame(track) {
+    const target = document.getElementById("music-youtube-player");
+    if (!target) throw new Error("Không tìm thấy khung phát video.");
+    if (!track.videoId && !track.playlistId) {
+        throw new Error("Lời mời không có video hoặc playlist YouTube hợp lệ.");
+    }
+
+    const iframe = document.createElement("iframe");
+    iframe.id = "music-youtube-player";
+    iframe.title = "Trình phát YouTube";
+    iframe.width = "100%";
+    iframe.height = "100%";
+    iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+    iframe.setAttribute("allowfullscreen", "");
+    iframe.setAttribute("referrerpolicy", "origin");
+
+    const videoUrl = track.videoId ?
+        new URL(`/embed/${encodeURIComponent(track.videoId)}`, "https://www.youtube.com") :
+        new URL("/embed/videoseries", "https://www.youtube.com");
+    videoUrl.searchParams.set("autoplay", "1");
+    videoUrl.searchParams.set("controls", "1");
+    videoUrl.searchParams.set("enablejsapi", "1");
+    videoUrl.searchParams.set("origin", location.origin);
+    videoUrl.searchParams.set("playsinline", "1");
+    videoUrl.searchParams.set("rel", "0");
+    videoUrl.searchParams.set("widget_referrer", location.href);
+    if (track.playlistId) videoUrl.searchParams.set("list", track.playlistId);
+
+    iframe.src = videoUrl.href;
+    target.replaceWith(iframe);
+    return iframe;
+}
+
+function loadYouTubeApi() {
+    if (window.YT?.Player) return Promise.resolve(window.YT);
+    if (!youtubeApiPromise) {
+        youtubeApiPromise = new Promise((resolve, reject) => {
+            const timeoutId = window.setTimeout(
+                () => reject(new Error("YouTube không phản hồi. Hãy kiểm tra kết nối Internet rồi thử lại.")),
+                YOUTUBE_PLAYER_TIMEOUT_MS,
+            );
+            const previousCallback = window.onYouTubeIframeAPIReady;
+            window.onYouTubeIframeAPIReady = () => {
+                window.clearTimeout(timeoutId);
+                try {
+                    if (typeof previousCallback === "function") previousCallback();
+                } finally {
+                    resolve(window.YT);
+                }
+            };
+            const script = document.createElement("script");
+            script.src = "https://www.youtube.com/iframe_api";
+            script.onerror = () => {
+                window.clearTimeout(timeoutId);
+                reject(new Error("Không thể tải YouTube. Kiểm tra kết nối Internet hoặc thử mở video trực tiếp."));
+            };
+            document.head.append(script);
+        }).catch((error) => {
+            youtubeApiPromise = null;
+            throw error;
+        });
+    }
+    return youtubeApiPromise;
+}
+
+function ensureYouTubePlayer() {
+    if (youtubePlayerReady && youtubePlayer) return Promise.resolve(youtubePlayer);
+    if (youtubePlayerPromise) return youtubePlayerPromise;
+    youtubePlayerPromise = loadYouTubeApi().then((YT) => new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(
+            () => reject(new Error("YouTube chưa tạo được trình phát. Hãy thử tải lại hoặc mở video trên YouTube.")),
+            YOUTUBE_PLAYER_TIMEOUT_MS,
+        );
+        const playerFrame = createYouTubePlayerFrame(currentMusicTrack || {});
+        youtubePlayer = new YT.Player(playerFrame, {
+            events: {
+                onReady: (event) => {
+                    window.clearTimeout(timeoutId);
+                    youtubePlayerReady = true;
+                    const iframe = event.target.getIframe();
+                    iframe.title = "Trình phát YouTube";
+                    iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+                    iframe.setAttribute("allowfullscreen", "");
+                    setMusicPlaybackStatus("Đã kết nối YouTube; đang tải video...");
+                    resolve(event.target);
+                },
+                onAutoplayBlocked: () => {
+                    setMusicPlaybackStatus("Trình duyệt chặn tự phát. Hãy nhấn Play trong khung video.");
+                },
+                onStateChange: (event) => {
+                    if (youtubeBufferingTimeoutId !== null) {
+                        window.clearTimeout(youtubeBufferingTimeoutId);
+                        youtubeBufferingTimeoutId = null;
+                    }
+                    if (event.data === YT.PlayerState.PLAYING) {
+                        clearMusicPlaybackError();
+                        setMusicPlaybackStatus("Đang phát qua YouTube...");
+                    } else if (event.data === YT.PlayerState.BUFFERING) {
+                        setMusicPlaybackStatus("Đang tải video từ YouTube...");
+                        youtubeBufferingTimeoutId = window.setTimeout(() => {
+                            youtubeBufferingTimeoutId = null;
+                            if (youtubePlayer?.getPlayerState() === YT.PlayerState.BUFFERING) {
+                                setMusicPlaybackStatus("Video tải quá lâu. Kiểm tra mạng hoặc chọn “Mở trên YouTube”.");
+                            }
+                        }, 12000);
+                    } else if (event.data === YT.PlayerState.PAUSED) {
+                        setMusicPlaybackStatus("Đã tạm dừng.");
+                    } else if (event.data === YT.PlayerState.ENDED) {
+                        setMusicPlaybackStatus("Video đã phát xong.");
+                    }
+                    lastObservedMusicTime = youtubePlayer.getCurrentTime() || 0;
+                    if (
+                        Date.now() >= suppressMusicSyncUntil &&
+                        [YT.PlayerState.PLAYING, YT.PlayerState.PAUSED, YT.PlayerState.ENDED].includes(event.data)
+                    ) {
+                        sendMusicState();
+                    }
+                },
+                onError: (event) => {
+                    window.clearTimeout(timeoutId);
+                    const reason = event.data === 101 || event.data === 150 ?
+                        "Chủ video không cho phép phát trong khung nhúng." :
+                        event.data === 153 ? "YouTube không nhận được thông tin trang nhúng. Hãy tải lại trang rồi thử lại." :
+                            event.data === 100 ? "Video không tồn tại, đã bị xóa hoặc đang ở chế độ riêng tư." :
+                            "YouTube không thể phát nội dung này.";
+                    const message = `${reason} Hãy chọn “Mở trên YouTube” hoặc thử video khác (mã ${event.data}).`;
+                    showMusicPlaybackError(message);
+                    reject(new Error(message));
+                },
+            },
+        });
+    })).catch((error) => {
+        youtubePlayerPromise = null;
+        throw error;
+    });
+    return youtubePlayerPromise;
+}
+
+async function loadMusicInPlayer(track, { position = 0, playbackState = "playing" } = {}) {
+    if (musicYouTubeFrame) musicYouTubeFrame.classList.remove("hidden");
     if (musicEmbedEmpty) musicEmbedEmpty.classList.add("hidden");
     if (musicOpenSource) {
-        musicOpenSource.href = track.sourceUrl;
-        musicOpenSource.classList.remove("hidden");
+        musicOpenSource.href = track.sourceUrl ||
+            (track.videoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(track.videoId)}` : "");
+        musicOpenSource.classList.toggle("hidden", !track.sourceUrl && !track.videoId);
     }
     if (musicTrackName) musicTrackName.textContent = track.name;
-    if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Đang phát qua YouTube...";
-    renderMusicPlaylist();
+    clearMusicPlaybackError();
+    if (musicPlaybackStatus) {
+        musicPlaybackStatus.textContent = "Đang kết nối với YouTube...";
+    }
+    updateMusicTransportControls();
+    updateMusicShareControls();
+    const player = await ensureYouTubePlayer();
+    suppressMusicSyncUntil = Date.now() + 1800;
+    lastObservedMusicTime = position;
+    if (playbackState === "ended") {
+        player.stopVideo();
+    } else if (track.videoId) {
+        if (playbackState === "playing") {
+            player.loadVideoById({ videoId: track.videoId, startSeconds: position });
+        } else {
+            player.cueVideoById({ videoId: track.videoId, startSeconds: position });
+        }
+    } else if (track.playlistId) {
+        const options = { listType: "playlist", list: track.playlistId, index: 0 };
+        if (playbackState === "playing") player.loadPlaylist(options);
+        else player.cuePlaylist(options);
+        if (playbackState === "paused" && position > 0) {
+            window.setTimeout(() => player.seekTo(position, true), 1200);
+        }
+    }
+    if (playbackState === "paused" && track.videoId) {
+        window.setTimeout(() => player.pauseVideo(), 600);
+    }
 }
+
+async function playMusicTrack(index) {
+    if (index < 0 || index >= musicPlaylist.length) return;
+    currentMusicIndex = index;
+    currentMusicTrack = musicPlaylist[index];
+    renderMusicPlaylist();
+    updateMusicShareControls();
+    try {
+        await loadMusicInPlayer(currentMusicTrack);
+    } catch (error) {
+        console.error("Không thể phát nội dung YouTube:", error);
+        if (musicPlaybackStatus) musicPlaybackStatus.textContent = error.message || "Không thể phát nội dung YouTube.";
+    }
+}
+
+function applyRemoteMusicState(data) {
+    if (!musicSyncActive || currentRoom !== musicSyncRoom) return;
+    const incomingKey = `${data.video_id || ""}:${data.playlist_id || ""}`;
+    const activeKey = currentMusicTrack?.key ||
+        `${currentMusicTrack?.videoId || ""}:${currentMusicTrack?.playlistId || ""}`;
+    const trackChanged = incomingKey !== activeKey;
+    const track = {
+        key: incomingKey,
+        videoId: data.video_id || "",
+        playlistId: data.playlist_id || "",
+        name: data.title || "YouTube",
+        sourceUrl: data.video_id ?
+            `https://www.youtube.com/watch?v=${encodeURIComponent(data.video_id)}` :
+            `https://www.youtube.com/playlist?list=${encodeURIComponent(data.playlist_id)}`,
+    };
+    if (trackChanged) {
+        currentMusicTrack = track;
+        currentMusicIndex = musicPlaylist.findIndex((item) => item.key === incomingKey);
+        renderMusicPlaylist();
+    }
+    updateMusicShareControls();
+    musicSyncLeader = data.sender;
+    lastMusicHeartbeatAt = Date.now();
+    if (musicYouTubeFrame) musicYouTubeFrame.classList.remove("hidden");
+    if (musicEmbedEmpty) musicEmbedEmpty.classList.add("hidden");
+    if (musicPlaybackError && !trackChanged) return;
+
+    ensureYouTubePlayer().then((player) => {
+        if (!musicSyncActive || currentRoom !== musicSyncRoom) return;
+        const currentPosition = player.getCurrentTime() || 0;
+        const currentState = player.getPlayerState();
+        const needsSeek = Math.abs(currentPosition - data.position) > 2;
+        suppressMusicSyncUntil = Date.now() + 1800;
+        if (trackChanged || currentState < 0 || currentState === 5 || data.playback_state === "ended") {
+            loadMusicInPlayer(track, {
+                position: data.position,
+                playbackState: data.playback_state,
+            }).catch((error) => console.error("Không thể đồng bộ trình phát:", error));
+        } else {
+            if (needsSeek) player.seekTo(data.position, true);
+            if (data.playback_state === "playing" && currentState !== 1) player.playVideo();
+            if (data.playback_state === "paused" && currentState !== 2) player.pauseVideo();
+        }
+    }).catch((error) => {
+        console.error("Không thể đồng bộ trình phát YouTube:", error);
+        showMusicPlaybackError(error.message || "Không tải được YouTube. Hãy kiểm tra kết nối rồi thử lại.");
+    });
+}
+
+function handleMusicSyncEvent(data) {
+    if (data.sender === currentUsername) return;
+    if (data.action === "invite") {
+        pendingMusicInvite = data;
+        if (musicInviteDescription) {
+            musicInviteDescription.textContent = `${data.sender} mời bạn nghe/xem “${data.title}” cùng nhau.`;
+        }
+        if (musicInviteBanner) musicInviteBanner.classList.remove("hidden");
+        return;
+    }
+    if (data.action === "decline" && data.sender === currentTargetUser) {
+        if (musicShareStatus) musicShareStatus.textContent = `${data.sender} chưa tham gia nghe/xem chung.`;
+        outgoingMusicInvite = false;
+        return;
+    }
+    if (data.action === "join" && outgoingMusicInvite && data.sender === currentTargetUser) {
+        outgoingMusicInvite = false;
+        musicSyncActive = true;
+        musicSyncRoom = currentRoom;
+        musicSyncLeader = currentUsername;
+        updateMusicShareControls();
+        sendMusicState();
+        return;
+    }
+    if (data.action === "state") {
+        if (pendingMusicInvite?.sender === data.sender && !musicSyncActive) {
+            pendingMusicInvite = data;
+            if (musicInviteDescription) {
+                musicInviteDescription.textContent = `${data.sender} đang phát “${data.title}”. Bạn có thể tham gia bất cứ lúc nào.`;
+            }
+        }
+        if (musicSyncActive && currentRoom === musicSyncRoom) applyRemoteMusicState(data);
+        return;
+    }
+    if (data.action === "leave" && pendingMusicInvite?.sender === data.sender) {
+        pendingMusicInvite = null;
+        if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
+        return;
+    }
+    if (data.action === "leave" && musicSyncActive && currentRoom === musicSyncRoom) {
+        musicSyncActive = false;
+        musicSyncRoom = "";
+        musicSyncLeader = "";
+        updateMusicShareControls();
+        if (musicShareStatus) musicShareStatus.textContent = `${data.sender} đã rời phiên nghe/xem chung. Nhạc của bạn vẫn tiếp tục phát.`;
+    }
+}
+
+if (musicShareButton) {
+    musicShareButton.addEventListener("click", () => {
+        if (!currentMusicTrack) return;
+        if (!sendMusicSignal(getMusicSnapshot("invite"))) {
+            if (musicShareStatus) musicShareStatus.textContent = "Hãy kết nối lại cuộc trò chuyện rồi thử mời lại.";
+            return;
+        }
+        outgoingMusicInvite = true;
+        if (musicShareStatus) musicShareStatus.textContent = `Đã gửi lời mời nghe/xem chung cho ${currentTargetUser}.`;
+    });
+}
+
+if (musicLeaveShareButton) {
+    musicLeaveShareButton.addEventListener("click", () => {
+        sendMusicSignal({ action: "leave" });
+        musicSyncActive = false;
+        musicSyncRoom = "";
+        musicSyncLeader = "";
+        updateMusicShareControls();
+        if (musicShareStatus) musicShareStatus.textContent = "Đã rời nghe/xem chung; nhạc của bạn vẫn tiếp tục phát.";
+    });
+}
+
+if (musicInviteAcceptButton) {
+    musicInviteAcceptButton.addEventListener("click", () => {
+        if (!pendingMusicInvite || !currentTargetUser) return;
+        const invite = pendingMusicInvite;
+        pendingMusicInvite = null;
+        if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
+        musicSyncActive = true;
+        musicSyncRoom = currentRoom;
+        musicSyncLeader = invite.sender;
+        outgoingMusicInvite = false;
+        if (musicModal) musicModal.classList.remove("hidden");
+        const track = {
+            key: `${invite.video_id || ""}:${invite.playlist_id || ""}`,
+            videoId: invite.video_id || "",
+            playlistId: invite.playlist_id || "",
+            name: invite.title || "YouTube",
+            sourceUrl: invite.video_id ?
+                `https://www.youtube.com/watch?v=${encodeURIComponent(invite.video_id)}` :
+                `https://www.youtube.com/playlist?list=${encodeURIComponent(invite.playlist_id)}`,
+        };
+        currentMusicTrack = track;
+        currentMusicIndex = musicPlaylist.findIndex((item) => item.key === track.key);
+        renderMusicPlaylist();
+        updateMusicShareControls();
+        loadMusicInPlayer(track, {
+            position: invite.position,
+            playbackState: invite.playback_state,
+        }).catch((error) => {
+            console.error("Không thể tham gia phiên nghe/xem chung:", error);
+            showMusicPlaybackError(error.message || "Không thể tải video. Hãy thử mở video trực tiếp trên YouTube.");
+        });
+        sendMusicSignal({ action: "join" });
+    });
+}
+
+if (musicInviteDeclineButton) {
+    musicInviteDeclineButton.addEventListener("click", () => {
+        if (pendingMusicInvite) sendMusicSignal({ action: "decline" });
+        pendingMusicInvite = null;
+        if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
+    });
+}
+
+window.setInterval(() => {
+    if (!youtubePlayerReady || !youtubePlayer) return;
+    const now = Date.now();
+    const position = youtubePlayer.getCurrentTime() || 0;
+    const state = youtubePlayer.getPlayerState();
+    if (
+        musicSyncActive &&
+        now >= suppressMusicSyncUntil &&
+        lastObservedMusicTime !== null &&
+        state !== 1 &&
+        Math.abs(position - lastObservedMusicTime) > 2
+    ) {
+        sendMusicState();
+    } else if (
+        musicSyncActive &&
+        musicSyncLeader === currentUsername &&
+        state === 1 &&
+        now - lastMusicHeartbeatAt >= 5000
+    ) {
+        sendMusicState();
+    }
+    lastObservedMusicTime = position;
+}, 1000);
 
 function removeMusicTrack(index) {
     musicPlaylist.splice(index, 1);
     if (currentMusicIndex === index) {
+        if (musicSyncActive) sendMusicSignal({ ...getMusicSnapshot("state"), playback_state: "ended" });
         currentMusicIndex = -1;
-        if (musicYouTubeFrame) {
-            musicYouTubeFrame.src = "about:blank";
-            musicYouTubeFrame.classList.add("hidden");
-        }
+        currentMusicTrack = null;
+        if (youtubePlayerReady && youtubePlayer) youtubePlayer.stopVideo();
+        if (musicYouTubeFrame) musicYouTubeFrame.classList.add("hidden");
         if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
         if (musicOpenSource) musicOpenSource.classList.add("hidden");
         if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
@@ -1098,15 +1605,18 @@ function removeMusicTrack(index) {
     }
     saveYouTubePlaylist();
     renderMusicPlaylist();
+    updateMusicTransportControls();
+    updateMusicShareControls();
 }
 
 function loadYouTubePlaylist(username) {
     musicPlaylist = [];
     currentMusicIndex = -1;
+    currentMusicTrack = null;
     if (musicYouTubeFrame) {
-        musicYouTubeFrame.src = "about:blank";
         musicYouTubeFrame.classList.add("hidden");
     }
+    if (youtubePlayerReady && youtubePlayer) youtubePlayer.stopVideo();
     if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
     if (musicOpenSource) musicOpenSource.classList.add("hidden");
     if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
@@ -1127,6 +1637,8 @@ function loadYouTubePlaylist(username) {
         console.error("Lỗi tải playlist YouTube:", err);
     }
     renderMusicPlaylist();
+    updateMusicTransportControls();
+    updateMusicShareControls();
 }
 
 if (musicLinkForm) {
@@ -1162,16 +1674,23 @@ if (musicNextButton) {
 
 if (musicStopButton) {
     musicStopButton.addEventListener("click", () => {
-        currentMusicIndex = -1;
-        if (musicYouTubeFrame) {
-            musicYouTubeFrame.src = "about:blank";
-            musicYouTubeFrame.classList.add("hidden");
+        if (musicSyncActive) {
+            sendMusicSignal({
+                ...getMusicSnapshot("state"),
+                playback_state: "ended",
+            });
         }
+        currentMusicIndex = -1;
+        currentMusicTrack = null;
+        if (youtubePlayerReady && youtubePlayer) youtubePlayer.stopVideo();
+        if (musicYouTubeFrame) musicYouTubeFrame.classList.add("hidden");
         if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
         if (musicOpenSource) musicOpenSource.classList.add("hidden");
         if (musicTrackName) musicTrackName.textContent = "Chưa chọn bài hát";
         if (musicPlaybackStatus) musicPlaybackStatus.textContent = "Đã dừng phát nhạc.";
         renderMusicPlaylist();
+        updateMusicTransportControls();
+        updateMusicShareControls();
     });
 }
 

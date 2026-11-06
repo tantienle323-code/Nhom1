@@ -26,6 +26,8 @@
 7. Chọn **🎵 Nhạc** trong chat để mở trình phát cá nhân. Dán link HTTPS của video hoặc playlist YouTube, thêm vào danh sách và phát trong khung YouTube. Danh sách link lưu riêng trong trình duyệt theo tài khoản; video được phát từ YouTube, không tải lên máy chủ chat hay tự chia sẻ với người đang trò chuyện.
 8. Có thể gửi ảnh PNG/JPEG/GIF/WebP hoặc video MP4/WebM tối đa 20 MB. Tệp được giới hạn kích thước, kiểm tra chữ ký định dạng và chỉ thành viên của cuộc trò chuyện chứa tệp mới xem được.
 
+Trong cuộc trò chuyện riêng, mở **🎵 Nhạc**, phát video YouTube rồi chọn **Mời nghe/xem chung**. Đối phương cần chọn **Tham gia**; sau đó cả hai mở cùng video và đồng bộ phát, tạm dừng hoặc tua trong lúc đang kết nối. YouTube phát trực tiếp trên từng thiết bị nên mỗi máy cần truy cập được YouTube; trình duyệt có thể yêu cầu người tham gia tự bấm Play để bật âm thanh. Nếu video không cho nhúng hoặc mạng chặn YouTube, khung phát trên máy đó không thể hiển thị video; trạng thái báo lỗi được giữ nguyên thay vì bị ghi đè bởi tín hiệu đồng bộ, và có thể dùng **Mở trên YouTube**. Chất lượng và kích thước hình ảnh có thể khác theo thiết bị/mạng. Danh sách phát cá nhân không bị chia sẻ.
+
 Nếu chưa cấu hình `ADMIN_USERNAME` và `ADMIN_PASSWORD`, các chức năng chat vẫn chạy nhưng trang quản trị bị vô hiệu hóa. Ở môi trường phát triển, nếu chưa cấu hình `AUTH_SECRET`, máy chủ tạo khóa tạm thời và phiên đăng nhập sẽ mất khi backend khởi động lại. Không dùng cấu hình đó khi triển khai production.
 
 ## Kiểm tra
@@ -35,3 +37,30 @@ Nếu chưa cấu hình `ADMIN_USERNAME` và `ADMIN_PASSWORD`, các chức năng
 ```
 
 `GET /api/health` kiểm tra trạng thái kết nối MongoDB.
+
+## Dùng máy khác trong cùng mạng Wi-Fi
+
+Đây là cách chia sẻ trong mạng nội bộ, không tạo website công khai trên Internet:
+
+1. Kết nối cả hai máy vào cùng mạng Wi-Fi đáng tin cậy. Nếu Windows đang đánh dấu Wi-Fi là **Public**, chỉ chuyển sang **Private** khi đó là mạng gia đình/trường học mà bạn tin cậy.
+2. Trên máy chủ chạy ứng dụng, mở PowerShell tại thư mục dự án và khởi động backend để lắng nghe kết nối trong mạng:
+
+   ```powershell
+   .\backend\venv\Scripts\python.exe -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000
+   ```
+
+3. Nếu Windows Firewall chặn kết nối, mở PowerShell **Run as administrator** và thêm luật chỉ cho phép thiết bị trong mạng nội bộ:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Chat Realtime - LAN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private -RemoteAddress LocalSubnet
+   ```
+
+4. Trên máy chủ, tìm địa chỉ IPv4:
+
+   ```powershell
+   Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -eq "Wi-Fi" -and $_.IPAddress -notlike "169.254.*" } | Select-Object -ExpandProperty IPAddress
+   ```
+
+   Trên máy khác, mở `http://DIA-CHI-IP:8000` (ví dụ `http://10.0.0.25:8000`). Máy chủ cần bật và backend phải tiếp tục chạy. Nếu Wi-Fi cấp IP mới, hãy tra lại địa chỉ.
+
+Không tạo port forwarding trên router và không mở luật firewall cho mọi mạng: hướng dẫn này chỉ dành cho cùng một mạng nội bộ. Muốn chia sẻ qua Internet cần triển khai lên dịch vụ host riêng; chưa có dịch vụ công khai nào được tạo.

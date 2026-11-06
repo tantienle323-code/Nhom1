@@ -1396,6 +1396,56 @@ async def websocket_endpoint(
                 result = await message_collection.insert_one(message)
                 message["_id"] = str(result.inserted_id)
                 await manager.broadcast_to_room(room, message)
+            elif msg_type == "music_sync":
+                if room.startswith("group_"):
+                    await send_socket_error(websocket, "Nghe/xem chung hiện chỉ hỗ trợ cuộc trò chuyện riêng.")
+                    continue
+                action = data.get("action")
+                if not isinstance(action, str) or action not in {"invite", "join", "decline", "state", "leave"}:
+                    await send_socket_error(websocket, "Thao tác nghe/xem chung không hợp lệ.")
+                    continue
+                event = {"type": "music_sync", "action": action, "sender": username}
+                if action in {"invite", "state"}:
+                    video_id = data.get("video_id")
+                    playlist_id = data.get("playlist_id")
+                    title = data.get("title", "")
+                    position = data.get("position", 0)
+                    playback_state = data.get("playback_state")
+                    valid_video_id = isinstance(video_id, str) and re.fullmatch(
+                        r"[A-Za-z0-9_-]{11}", video_id
+                    )
+                    valid_playlist_id = isinstance(playlist_id, str) and re.fullmatch(
+                        r"[A-Za-z0-9_-]{10,100}", playlist_id
+                    )
+                    if (
+                        not valid_video_id and not valid_playlist_id
+                    ) or (
+                        video_id not in (None, "") and not valid_video_id
+                    ) or (
+                        playlist_id not in (None, "") and not valid_playlist_id
+                    ):
+                        await send_socket_error(websocket, "Video hoặc playlist YouTube không hợp lệ.")
+                        continue
+                    if not isinstance(title, str) or len(title) > 100:
+                        await send_socket_error(websocket, "Tên nội dung nghe/xem chung không hợp lệ.")
+                        continue
+                    if (
+                        isinstance(position, bool)
+                        or not isinstance(position, (int, float))
+                        or not 0 <= position <= 86400
+                        or not isinstance(playback_state, str)
+                        or playback_state not in {"playing", "paused", "ended"}
+                    ):
+                        await send_socket_error(websocket, "Trạng thái phát nội dung không hợp lệ.")
+                        continue
+                    event.update({
+                        "video_id": video_id if valid_video_id else "",
+                        "playlist_id": playlist_id if valid_playlist_id else "",
+                        "title": title,
+                        "position": position,
+                        "playback_state": playback_state,
+                    })
+                await manager.broadcast_to_room(room, event)
             elif msg_type in {"edit_message", "delete_message"}:
                 message_id = data.get("message_id")
                 if not isinstance(message_id, str) or not ObjectId.is_valid(message_id):

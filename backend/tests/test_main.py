@@ -310,11 +310,12 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(upload.closed)
 
     async def test_upload_rejects_oversized_file_without_content_length(self):
-        upload = self.FakeUpload(
-            b"\x89PNG\r\n\x1a\n" + b"x" * main.MAX_UPLOAD_BYTES
-        )
+        upload = self.FakeUpload(b"\x89PNG\r\n\x1a\n" + b"x" * 16)
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(main, "UPLOAD_DIR", Path(directory)):
+            with (
+                patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "MAX_UPLOAD_BYTES", 16),
+            ):
                 with self.assertRaises(HTTPException) as error:
                     await main.upload_file(self.request(), upload, "alice")
             self.assertEqual(list(Path(directory).iterdir()), [])
@@ -366,6 +367,177 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(route_paths.index("/api/groups"), frontend_mount)
         self.assertLess(route_paths.index("/api/upload"), frontend_mount)
         self.assertLess(route_paths.index("/uploads/{filename}"), frontend_mount)
+
+
+class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_chat_forwards_valid_music_invites_without_persisting_them(self):
+        token = main.create_access_token("alice")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [
+                    {
+                        "type": "music_sync",
+                        "action": "invite",
+                        "video_id": "abcdefghijk",
+                        "playlist_id": "",
+                        "title": "Shared video",
+                        "position": 3.5,
+                        "playback_state": "playing",
+                    },
+                    {
+                        "type": "music_sync",
+                        "action": "state",
+                        "video_id": "bad",
+                        "position": 0,
+                        "playback_state": "playing",
+                    },
+                ]
+
+            async def accept(self, subprotocol):
+                pass
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "alice"}
+
+        socket = FakeSocket()
+        with (
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "manager", main.ConnectionManager()),
+        ):
+            await main.websocket_endpoint(socket, "chat_alice_bob", "alice")
+
+        invitation = next(event for event in socket.events if event.get("type") == "music_sync")
+        self.assertEqual(invitation["action"], "invite")
+        self.assertEqual(invitation["sender"], "alice")
+        self.assertEqual(invitation["video_id"], "abcdefghijk")
+        self.assertEqual(invitation["position"], 3.5)
+        self.assertTrue(any(event.get("type") == "error" for event in socket.events))
+
+    async def test_private_chat_forwards_playback_state_and_rejects_invalid_timing(self):
+        token = main.create_access_token("bob")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [
+                    {
+                        "type": "music_sync",
+                        "action": "state",
+                        "video_id": "abcdefghijk",
+                        "playlist_id": "",
+                        "title": "Shared video",
+                        "position": 42,
+                        "playback_state": "paused",
+                    },
+                    {
+                        "type": "music_sync",
+                        "action": "state",
+                        "video_id": "abcdefghijk",
+                        "playlist_id": "",
+                        "title": "Shared video",
+                        "position": float("inf"),
+                        "playback_state": "playing",
+                    },
+                ]
+
+            async def accept(self, subprotocol):
+                pass
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "bob"}
+
+        socket = FakeSocket()
+        with (
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "manager", main.ConnectionManager()),
+        ):
+            await main.websocket_endpoint(socket, "chat_alice_bob", "bob")
+
+        state = next(event for event in socket.events if event.get("type") == "music_sync")
+        self.assertEqual(state["playback_state"], "paused")
+        self.assertEqual(state["position"], 42)
+        self.assertTrue(any(event.get("type") == "error" for event in socket.events))
+
+    async def test_group_rooms_cannot_broadcast_shared_music(self):
+        token = main.create_access_token("alice")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [{"type": "music_sync", "action": "invite"}]
+
+            async def accept(self, subprotocol):
+                pass
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "alice"}
+
+        class Groups:
+            async def find_one(self, query, projection):
+                return {"_id": query["_id"]}
+
+        class Database:
+            def __getitem__(self, collection):
+                if collection != "groups":
+                    raise AssertionError(collection)
+                return Groups()
+
+        socket = FakeSocket()
+        with (
+            patch.object(main, "database", Database()),
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "manager", main.ConnectionManager()),
+        ):
+            await main.websocket_endpoint(socket, "group_test", "alice")
+
+        self.assertTrue(any(event.get("type") == "error" for event in socket.events))
+        self.assertFalse(any(event.get("type") == "music_sync" for event in socket.events))
 
 
 class FakeWebSocket:
