@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261106-share-same-video">
+    <link rel="stylesheet" href="style.css?v=20261106-video-call">
 </head>
 <body>
     <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ (TELEGRAM STYLE) -->
@@ -61,6 +61,7 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" disabled>📹 Gọi</button>
                     <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
                     <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
                     <a class="tg-admin-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game</a>
@@ -208,6 +209,33 @@
         </div>
     </aside>
 
+    <div id="call-overlay" class="call-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="call-title">
+        <section class="call-panel">
+            <header class="call-header">
+                <div>
+                    <p class="world-eyebrow">CUỘC GỌI VIDEO</p>
+                    <h2 id="call-title">Cuộc gọi</h2>
+                    <p id="call-status" role="status">Đang kết nối...</p>
+                </div>
+                <button id="call-close-btn" class="call-close-btn hidden" type="button" aria-label="Đóng cuộc gọi">×</button>
+            </header>
+            <div id="call-incoming" class="call-incoming hidden">
+                <p id="call-incoming-text"></p>
+                <div class="call-controls">
+                    <button id="call-accept-btn" class="call-accept-btn" type="button">📹 Tham gia</button>
+                    <button id="call-reject-btn" class="call-hangup-btn" type="button">Từ chối</button>
+                </div>
+            </div>
+            <div id="call-video-grid" class="call-video-grid"></div>
+            <div id="call-controls" class="call-controls hidden">
+                <button id="call-mic-btn" type="button" aria-pressed="true">🎙️ Tắt mic</button>
+                <button id="call-camera-btn" type="button" aria-pressed="true">📷 Tắt camera</button>
+                <button id="call-screen-btn" type="button" aria-pressed="false">🖥️ Chia sẻ màn hình</button>
+                <button id="call-hangup-btn" class="call-hangup-btn" type="button">📞 Kết thúc</button>
+            </div>
+        </section>
+    </div>
+
     <div id="group-modal" class="modal-overlay hidden">
         <section class="tg-modal-card" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <h3 id="group-modal-title">Tạo nhóm chat mới</h3>
@@ -220,6 +248,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261106-share-same-video"></script>
+    <script src="app.js?v=20261106-video-call"></script>
 </body>
 </html>

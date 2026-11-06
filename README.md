@@ -28,6 +28,8 @@
 
 Trong cuộc trò chuyện riêng, mở **🎵 Nhạc**, phát video YouTube rồi chọn **Mời nghe/xem chung**. Đối phương cần chọn **Tham gia**; sau đó cả hai mở cùng video và đồng bộ phát, tạm dừng hoặc tua trong lúc đang kết nối. YouTube phát trực tiếp trên từng thiết bị nên mỗi máy cần truy cập được YouTube; trình duyệt có thể yêu cầu người tham gia tự bấm Play để bật âm thanh. Nếu video không cho nhúng hoặc mạng chặn YouTube, khung phát trên máy đó không thể hiển thị video; trạng thái báo lỗi được giữ nguyên thay vì bị ghi đè bởi tín hiệu đồng bộ, và có thể dùng **Mở trên YouTube**. Chất lượng và kích thước hình ảnh có thể khác theo thiết bị/mạng. Danh sách phát cá nhân không bị chia sẻ.
 
+Trong chat riêng hoặc nhóm, chọn **📹 Gọi**, cho phép dùng camera/micro rồi người nhận chọn tham gia. Cuộc gọi hỗ trợ tắt/bật camera và micro, chia sẻ màn hình, từ chối và kết thúc; tối đa 4 người cùng tham gia một cuộc gọi nhóm. Video và âm thanh truyền trực tiếp giữa các trình duyệt bằng WebRTC, không đi qua máy chủ chat. Trình duyệt yêu cầu **HTTPS** để truy cập camera/micro trên thiết bị khác (localhost được phép dùng HTTP). Cấu hình STUN hiện tại hỗ trợ một số kết nối; nếu các thiết bị ở những mạng khác nhau và không kết nối được thì cần triển khai HTTPS và máy chủ TURN riêng.
+
 Nếu chưa cấu hình `ADMIN_USERNAME` và `ADMIN_PASSWORD`, các chức năng chat vẫn chạy nhưng trang quản trị bị vô hiệu hóa. Ở môi trường phát triển, nếu chưa cấu hình `AUTH_SECRET`, máy chủ tạo khóa tạm thời và phiên đăng nhập sẽ mất khi backend khởi động lại. Không dùng cấu hình đó khi triển khai production.
 
 ## Kiểm tra

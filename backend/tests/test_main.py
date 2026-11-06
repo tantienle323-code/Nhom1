@@ -540,6 +540,155 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(event.get("type") == "music_sync" for event in socket.events))
 
 
+class WebRTCCallManagerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_call_participants_are_limited_and_signals_are_peer_scoped(self):
+        sessions = main.WebRTCCallManager()
+        call_id = "4f835e84-4f28-486f-a2ea-fbe5b23a192a"
+
+        self.assertTrue(await sessions.start("group_room", call_id, "alice"))
+        for username in ("bob", "carol", "david"):
+            joined, _ = await sessions.join("group_room", call_id, username)
+            self.assertTrue(joined)
+
+        joined, participants = await sessions.join("group_room", call_id, "eve")
+        self.assertFalse(joined)
+        self.assertEqual(len(participants), 4)
+        self.assertTrue(await sessions.can_signal("group_room", call_id, "alice", "bob"))
+        self.assertFalse(await sessions.can_signal("group_room", call_id, "alice", "eve"))
+        self.assertFalse(await sessions.can_signal("another_room", call_id, "alice", "bob"))
+
+    async def test_call_session_closes_after_last_participant_leaves(self):
+        sessions = main.WebRTCCallManager()
+        call_id = "d378c706-7979-48b2-8484-f2684333f989"
+        await sessions.start("chat_alice_bob", call_id, "alice")
+        await sessions.join("chat_alice_bob", call_id, "bob")
+
+        left, participants = await sessions.leave("chat_alice_bob", call_id, "alice")
+        self.assertTrue(left)
+        self.assertEqual(participants, ["bob"])
+        self.assertTrue(await sessions.exists("chat_alice_bob", call_id))
+
+        left, participants = await sessions.leave("chat_alice_bob", call_id, "bob")
+        self.assertTrue(left)
+        self.assertEqual(participants, [])
+        self.assertFalse(await sessions.exists("chat_alice_bob", call_id))
+
+    async def test_call_endpoint_rejects_signaling_to_nonparticipants(self):
+        token = main.create_access_token("alice")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [
+                    {
+                        "type": "call_signal",
+                        "action": "invite",
+                        "call_id": "36f0651e-1ddb-4710-a938-c11a86b5ac4e",
+                    },
+                    {
+                        "type": "call_signal",
+                        "action": "offer",
+                        "call_id": "36f0651e-1ddb-4710-a938-c11a86b5ac4e",
+                        "target": "bob",
+                        "description": {"type": "offer", "sdp": "v=0"},
+                    },
+                ]
+
+            async def accept(self, subprotocol):
+                pass
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "alice"}
+
+        socket = FakeSocket()
+        with (
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "manager", main.ConnectionManager()),
+            patch.object(main, "call_manager", main.WebRTCCallManager()),
+        ):
+            await main.websocket_endpoint(socket, "chat_alice_bob", "alice")
+
+        self.assertTrue(any(event.get("action") == "invite" for event in socket.events))
+        self.assertTrue(any(event.get("type") == "error" for event in socket.events))
+        self.assertFalse(any(event.get("action") == "offer" for event in socket.events))
+
+    async def test_call_endpoint_relays_peer_offer_only_to_target(self):
+        token = main.create_access_token("alice")
+        call_id = "cf1e2563-6eb5-405b-a37b-c59c2cd0110b"
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self, incoming=()):
+                self.events = []
+                self.incoming = list(incoming)
+
+            async def accept(self, subprotocol):
+                pass
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": query.get("username", "alice")}
+
+        room = "chat_alice_bob"
+        manager = main.ConnectionManager()
+        bob = FakeSocket()
+        await manager.connect(room, "bob", bob)
+        calls = main.WebRTCCallManager()
+        await calls.start(room, call_id, "alice")
+        await calls.join(room, call_id, "bob")
+        alice = FakeSocket([{
+            "type": "call_signal",
+            "action": "offer",
+            "call_id": call_id,
+            "target": "bob",
+            "description": {"type": "offer", "sdp": "v=0"},
+        }])
+
+        with (
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "manager", manager),
+            patch.object(main, "call_manager", calls),
+        ):
+            await main.websocket_endpoint(alice, room, "alice")
+
+        offers = [
+            event for event in bob.events
+            if event.get("type") == "call_signal" and event.get("action") == "offer"
+        ]
+        self.assertEqual(len(offers), 1)
+        self.assertEqual(offers[0]["sender"], "alice")
+        self.assertEqual(offers[0]["target"], "bob")
+        self.assertFalse(any(event.get("type") == "call_signal" for event in alice.events))
+
+
 class FakeWebSocket:
     def __init__(self):
         self.events = []

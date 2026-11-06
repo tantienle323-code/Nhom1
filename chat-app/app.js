@@ -14,6 +14,8 @@ let users = [];
 let groups = [];
 let selectedMemoryMessageId = null;
 const onlineUsers = new Set();
+let activeCall = null;
+let pendingCallInvite = null;
 
 const loginScreen = document.getElementById("login-screen");
 const chatScreen = document.getElementById("chat-screen");
@@ -28,6 +30,21 @@ const logoutBtn = document.getElementById("logout-btn");
 const headerName = document.getElementById("header-name");
 const headerAvatar = document.getElementById("header-avatar");
 const headerStatus = document.getElementById("header-status");
+const videoCallButton = document.getElementById("video-call-btn");
+const callOverlay = document.getElementById("call-overlay");
+const callTitle = document.getElementById("call-title");
+const callStatus = document.getElementById("call-status");
+const callCloseButton = document.getElementById("call-close-btn");
+const callIncoming = document.getElementById("call-incoming");
+const callIncomingText = document.getElementById("call-incoming-text");
+const callAcceptButton = document.getElementById("call-accept-btn");
+const callRejectButton = document.getElementById("call-reject-btn");
+const callVideoGrid = document.getElementById("call-video-grid");
+const callControls = document.getElementById("call-controls");
+const callMicButton = document.getElementById("call-mic-btn");
+const callCameraButton = document.getElementById("call-camera-btn");
+const callScreenButton = document.getElementById("call-screen-btn");
+const callHangupButton = document.getElementById("call-hangup-btn");
 const messagesContainer = document.getElementById("messages-container");
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
@@ -175,6 +192,7 @@ function showLogin() {
 }
 
 function signOut(reload = true) {
+    finishVideoCall();
     resetMusicSyncSession(true);
     if (musicYouTubeFrame) {
         musicYouTubeFrame.classList.add("hidden");
@@ -394,11 +412,13 @@ async function loadGroupsList() {
 }
 
 async function switchGroupChat(group) {
+    finishVideoCall();
     resetMusicSyncSession(true);
     pendingMusicInvite = null;
     if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
     currentTargetUser = "";
     currentRoom = group.id;
+    updateVideoCallButton();
     if (worldOpenButton) worldOpenButton.disabled = true;
     if (worldModal) worldModal.classList.add("hidden");
     clearMemorySource();
@@ -498,7 +518,444 @@ function setPresence(username, isOnline) {
     }
 }
 
+function updateVideoCallButton() {
+    if (videoCallButton) {
+        videoCallButton.disabled =
+            !currentRoom || socket?.readyState !== WebSocket.OPEN ||
+            Boolean(activeCall) || Boolean(pendingCallInvite);
+    }
+}
+
+function sendCallSignal(action, callId, details = {}) {
+    if (socket?.readyState !== WebSocket.OPEN || !currentRoom || !callId) return false;
+    socket.send(JSON.stringify({
+        type: "call_signal",
+        action,
+        call_id: callId,
+        ...details,
+    }));
+    return true;
+}
+
+function setCallStatus(message) {
+    if (callStatus) callStatus.textContent = message;
+}
+
+function createCallVideoTile(username, local = false) {
+    const tile = document.createElement("div");
+    tile.className = `call-video-tile${local ? " local" : ""}`;
+    const video = document.createElement("video");
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = local;
+    video.controls = !local;
+    const label = document.createElement("span");
+    label.textContent = local ? `${username} (bạn)` : username;
+    tile.append(video, label);
+    callVideoGrid?.append(tile);
+    return { tile, video, label };
+}
+
+function setCallLocalStream(stream, isScreenShare = false) {
+    if (!activeCall) return;
+    let localTile = activeCall.localTile;
+    if (!localTile) {
+        localTile = createCallVideoTile(currentUsername, true);
+        activeCall.localTile = localTile;
+    }
+    localTile.video.srcObject = stream;
+    localTile.tile.classList.toggle("screen-share", isScreenShare);
+    localTile.video.play().catch(() => {});
+}
+
+function renderCallStatus() {
+    if (!activeCall) return;
+    const others = [...activeCall.participants].filter((name) => name !== currentUsername);
+    setCallStatus(others.length ? `Đang gọi cùng ${others.join(", ")}` : "Đang chờ người khác tham gia...");
+}
+
+function closeCallPeer(username) {
+    const peer = activeCall?.peers.get(username);
+    if (peer) {
+        peer.pc.onicecandidate = null;
+        peer.pc.ontrack = null;
+        peer.pc.onconnectionstatechange = null;
+        peer.pc.close();
+        peer.tile.remove();
+        activeCall.peers.delete(username);
+    }
+    activeCall.participants.delete(username);
+    renderCallStatus();
+}
+
+function createCallPeer(username) {
+    if (!activeCall) throw new Error("Cuộc gọi đã kết thúc.");
+    const existing = activeCall.peers.get(username);
+    if (existing) return existing;
+
+    const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    const videoStream = activeCall.screenStream || activeCall.localStream;
+    for (const track of videoStream.getVideoTracks()) pc.addTrack(track, videoStream);
+    for (const track of activeCall.localStream.getAudioTracks()) {
+        pc.addTrack(track, activeCall.localStream);
+    }
+
+    const remoteStream = new MediaStream();
+    const { tile, video } = createCallVideoTile(username);
+    video.srcObject = remoteStream;
+    const peer = { pc, stream: remoteStream, tile, video, pendingCandidates: [] };
+    activeCall.peers.set(username, peer);
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            sendCallSignal("ice", activeCall?.id, {
+                target: username,
+                candidate: event.candidate.toJSON(),
+            });
+        }
+    };
+    pc.ontrack = (event) => {
+        const incomingStream = event.streams[0];
+        if (incomingStream) {
+            peer.video.srcObject = incomingStream;
+            peer.stream = incomingStream;
+        } else if (!peer.stream.getTracks().some((track) => track.id === event.track.id)) {
+            peer.stream.addTrack(event.track);
+        }
+        peer.tile.classList.toggle(
+            "audio-only",
+            !peer.stream.getVideoTracks().some((track) => track.enabled),
+        );
+        peer.video.play().catch(() => {
+            setCallStatus(`Nhấn Phát trên khung video của ${username} để bật hình/tiếng.`);
+        });
+    };
+    pc.onconnectionstatechange = () => {
+        if (!activeCall || !activeCall.peers.has(username)) return;
+        if (pc.connectionState === "failed") {
+            setCallStatus(`Không kết nối được với ${username}. Hãy thử cùng Wi-Fi hoặc cấu hình TURN.`);
+        } else if (pc.connectionState === "connected") {
+            renderCallStatus();
+        }
+    };
+    return peer;
+}
+
+async function flushCallCandidates(peer) {
+    for (const candidate of peer.pendingCandidates.splice(0)) {
+        await peer.pc.addIceCandidate(candidate);
+    }
+}
+
+async function createCallOffer(username) {
+    const peer = createCallPeer(username);
+    const offer = await peer.pc.createOffer();
+    await peer.pc.setLocalDescription(offer);
+    if (!sendCallSignal("offer", activeCall?.id, {
+        target: username,
+        description: peer.pc.localDescription,
+    })) {
+        throw new Error("Mất kết nối chat; không gửi được lời mời kết nối video.");
+    }
+}
+
+async function handleCallSignal(data) {
+    if (data.sender === currentUsername) return;
+
+    if (data.action === "invite") {
+        if (activeCall || pendingCallInvite) {
+            sendCallSignal("reject", data.call_id);
+            return;
+        }
+        pendingCallInvite = { ...data, room: currentRoom };
+        updateVideoCallButton();
+        if (callTitle) callTitle.textContent = currentRoom.startsWith("group_") ? "Cuộc gọi nhóm" : "Cuộc gọi video";
+        if (callIncomingText) callIncomingText.textContent = `${data.sender} đang mời bạn tham gia cuộc gọi video.`;
+        callIncoming?.classList.remove("hidden");
+        callVideoGrid?.classList.add("hidden");
+        callControls?.classList.add("hidden");
+        callCloseButton?.classList.add("hidden");
+        callOverlay?.classList.remove("hidden");
+        setCallStatus("Cuộc gọi đến");
+        return;
+    }
+
+    if (data.action === "reject") {
+        if (activeCall?.id === data.call_id) {
+            setCallStatus(`${data.sender} đã từ chối cuộc gọi.`);
+        }
+        return;
+    }
+    if (data.action === "peer_left") {
+        if (activeCall?.id === data.call_id) closeCallPeer(data.sender);
+        return;
+    }
+    if (data.action === "join") {
+        if (!activeCall || activeCall.id !== data.call_id || data.sender === currentUsername) return;
+        activeCall.participants.add(data.sender);
+        renderCallStatus();
+        try {
+            await createCallOffer(data.sender);
+        } catch (error) {
+            console.error("Không thể kết nối người tham gia cuộc gọi:", error);
+            setCallStatus(error.message || `Không thể kết nối với ${data.sender}.`);
+        }
+        return;
+    }
+    if (!activeCall || activeCall.id !== data.call_id || data.target !== currentUsername) return;
+    activeCall.participants.add(data.sender);
+    renderCallStatus();
+
+    try {
+        if (data.action === "offer") {
+            const peer = createCallPeer(data.sender);
+            await peer.pc.setRemoteDescription(data.description);
+            await flushCallCandidates(peer);
+            const answer = await peer.pc.createAnswer();
+            await peer.pc.setLocalDescription(answer);
+            if (!sendCallSignal("answer", activeCall.id, {
+                target: data.sender,
+                description: peer.pc.localDescription,
+            })) throw new Error("Mất kết nối chat; không gửi được phản hồi cuộc gọi.");
+        } else if (data.action === "answer") {
+            const peer = activeCall.peers.get(data.sender);
+            if (!peer) return;
+            await peer.pc.setRemoteDescription(data.description);
+            await flushCallCandidates(peer);
+        } else if (data.action === "ice") {
+            const peer = activeCall.peers.get(data.sender);
+            if (!peer) return;
+            if (peer.pc.remoteDescription) await peer.pc.addIceCandidate(data.candidate);
+            else peer.pendingCandidates.push(data.candidate);
+        }
+    } catch (error) {
+        console.error("Không thể xử lý tín hiệu cuộc gọi:", error);
+        setCallStatus(`Lỗi kết nối với ${data.sender}. Hãy kiểm tra mạng hoặc bật HTTPS.`);
+    }
+}
+
+async function acquireCallMedia() {
+    if (!window.RTCPeerConnection || !window.MediaStream) {
+        throw new Error("Trình duyệt này không hỗ trợ gọi video WebRTC.");
+    }
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Trình duyệt yêu cầu HTTPS để dùng camera/micro trên thiết bị khác. Hãy mở trang bằng HTTPS.");
+    }
+    return navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+}
+
+function prepareActiveCall(callId, initiator, localStream) {
+    activeCall = {
+        id: callId,
+        room: currentRoom,
+        initiator,
+        localStream,
+        screenStream: null,
+        localTile: null,
+        peers: new Map(),
+        participants: new Set([currentUsername]),
+    };
+    callIncoming?.classList.add("hidden");
+    callVideoGrid?.classList.remove("hidden");
+    callControls?.classList.remove("hidden");
+    callCloseButton?.classList.add("hidden");
+    callOverlay?.classList.remove("hidden");
+    if (callTitle) callTitle.textContent = currentRoom.startsWith("group_") ? "Cuộc gọi nhóm" : "Cuộc gọi video";
+    setCallLocalStream(localStream);
+    if (callMicButton) {
+        callMicButton.textContent = "🎙️ Tắt mic";
+        callMicButton.setAttribute("aria-pressed", "true");
+    }
+    if (callCameraButton) {
+        callCameraButton.textContent = "📷 Tắt camera";
+        callCameraButton.setAttribute("aria-pressed", "true");
+    }
+    if (callScreenButton) {
+        callScreenButton.textContent = "🖥️ Chia sẻ màn hình";
+        callScreenButton.setAttribute("aria-pressed", "false");
+    }
+    updateVideoCallButton();
+    renderCallStatus();
+}
+
+async function startVideoCall() {
+    if (!currentRoom || socket?.readyState !== WebSocket.OPEN || activeCall) return;
+    const callRoom = currentRoom;
+    const callSocket = socket;
+    let localStream = null;
+    try {
+        localStream = await acquireCallMedia();
+        if (currentRoom !== callRoom || socket !== callSocket || socket?.readyState !== WebSocket.OPEN) {
+            localStream.getTracks().forEach((track) => track.stop());
+            return;
+        }
+        const callId = crypto.randomUUID ?
+            crypto.randomUUID() :
+            ([...crypto.getRandomValues(new Uint8Array(16))]
+                .map((value) => value.toString(16).padStart(2, "0"))
+                .join(""));
+        prepareActiveCall(callId, currentUsername, localStream);
+        if (!sendCallSignal("invite", callId)) {
+            finishVideoCall(false);
+            alert("Không gửi được lời mời. Hãy kết nối lại chat rồi thử lại.");
+            return;
+        }
+        setCallStatus("Đang mời thành viên trong cuộc trò chuyện...");
+    } catch (error) {
+        if (localStream && activeCall?.localStream !== localStream) {
+            localStream.getTracks().forEach((track) => track.stop());
+        }
+        console.error("Không thể bắt đầu cuộc gọi video:", error);
+        alert(error.message || "Không thể truy cập camera hoặc micro. Hãy kiểm tra quyền truy cập của trình duyệt.");
+    }
+}
+
+async function acceptVideoCall() {
+    const invite = pendingCallInvite;
+    if (!invite || invite.room !== currentRoom || socket?.readyState !== WebSocket.OPEN) return;
+    let localStream = null;
+    try {
+        localStream = await acquireCallMedia();
+        if (pendingCallInvite?.call_id !== invite.call_id || socket?.readyState !== WebSocket.OPEN) {
+            localStream.getTracks().forEach((track) => track.stop());
+            return;
+        }
+        pendingCallInvite = null;
+        prepareActiveCall(invite.call_id, invite.sender, localStream);
+        activeCall.participants.add(invite.sender);
+        renderCallStatus();
+        if (!sendCallSignal("join", invite.call_id)) finishVideoCall(false);
+    } catch (error) {
+        if (localStream && activeCall?.localStream !== localStream) {
+            localStream.getTracks().forEach((track) => track.stop());
+        }
+        console.error("Không thể tham gia cuộc gọi video:", error);
+        setCallStatus(error.message || "Không thể truy cập camera hoặc micro.");
+    }
+}
+
+function rejectVideoCall() {
+    if (pendingCallInvite) sendCallSignal("reject", pendingCallInvite.call_id);
+    pendingCallInvite = null;
+    callOverlay?.classList.add("hidden");
+    callIncoming?.classList.add("hidden");
+    updateVideoCallButton();
+}
+
+function finishVideoCall(notify = true) {
+    const call = activeCall;
+    if (notify && call && call.room === currentRoom) sendCallSignal("leave", call.id);
+    if (notify && pendingCallInvite?.room === currentRoom) {
+        sendCallSignal("reject", pendingCallInvite.call_id);
+    }
+    activeCall = null;
+    if (call) {
+        for (const peer of call.peers.values()) peer.pc.close();
+        for (const track of call.localStream.getTracks()) track.stop();
+        for (const track of call.screenStream?.getTracks() || []) track.stop();
+    }
+    pendingCallInvite = null;
+    callVideoGrid?.replaceChildren();
+    callOverlay?.classList.add("hidden");
+    callIncoming?.classList.add("hidden");
+    callVideoGrid?.classList.remove("hidden");
+    callControls?.classList.add("hidden");
+    callCloseButton?.classList.add("hidden");
+    updateVideoCallButton();
+}
+
+async function toggleCallScreenShare() {
+    if (!activeCall) return;
+    if (activeCall.screenStream) {
+        stopCallScreenShare();
+        return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+        setCallStatus("Trình duyệt này không hỗ trợ chia sẻ màn hình.");
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        if (!activeCall) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+        }
+        activeCall.screenStream = stream;
+        const screenTrack = stream.getVideoTracks()[0];
+        for (const peer of activeCall.peers.values()) {
+            const sender = peer.pc.getSenders().find((item) => item.track?.kind === "video");
+            if (sender) await sender.replaceTrack(screenTrack);
+        }
+        setCallLocalStream(stream, true);
+        if (callScreenButton) {
+            callScreenButton.textContent = "⏹ Dừng chia sẻ";
+            callScreenButton.setAttribute("aria-pressed", "true");
+        }
+        if (callCameraButton) callCameraButton.disabled = true;
+        screenTrack.addEventListener("ended", stopCallScreenShare, { once: true });
+        setCallStatus("Đang chia sẻ màn hình.");
+    } catch (error) {
+        if (error.name !== "NotAllowedError") {
+            console.error("Không thể chia sẻ màn hình:", error);
+            setCallStatus("Không thể chia sẻ màn hình. Hãy thử cấp quyền hoặc dùng trình duyệt khác.");
+        }
+    }
+}
+
+function stopCallScreenShare() {
+    if (!activeCall?.screenStream) return;
+    const call = activeCall;
+    const cameraTrack = call.localStream.getVideoTracks()[0];
+    call.screenStream.getTracks().forEach((track) => track.stop());
+    call.screenStream = null;
+    if (cameraTrack) {
+        for (const peer of call.peers.values()) {
+            const sender = peer.pc.getSenders().find((item) => item.track?.kind === "video");
+            if (sender) sender.replaceTrack(cameraTrack).catch((error) => {
+                console.error("Không thể khôi phục camera:", error);
+            });
+        }
+    }
+    setCallLocalStream(call.localStream);
+    if (callScreenButton) {
+        callScreenButton.textContent = "🖥️ Chia sẻ màn hình";
+        callScreenButton.setAttribute("aria-pressed", "false");
+    }
+    if (callCameraButton) callCameraButton.disabled = false;
+    renderCallStatus();
+}
+
+if (videoCallButton) videoCallButton.addEventListener("click", startVideoCall);
+if (callAcceptButton) callAcceptButton.addEventListener("click", acceptVideoCall);
+if (callRejectButton) callRejectButton.addEventListener("click", rejectVideoCall);
+if (callHangupButton) callHangupButton.addEventListener("click", () => finishVideoCall());
+if (callCloseButton) callCloseButton.addEventListener("click", () => finishVideoCall());
+if (callMicButton) {
+    callMicButton.addEventListener("click", () => {
+        const track = activeCall?.localStream.getAudioTracks()[0];
+        if (!track) return;
+        track.enabled = !track.enabled;
+        callMicButton.textContent = track.enabled ? "🎙️ Tắt mic" : "🔇 Bật mic";
+        callMicButton.setAttribute("aria-pressed", String(track.enabled));
+    });
+}
+if (callCameraButton) {
+    callCameraButton.addEventListener("click", () => {
+        const track = activeCall?.localStream.getVideoTracks()[0];
+        if (!track) return;
+        track.enabled = !track.enabled;
+        callCameraButton.textContent = track.enabled ? "📷 Tắt camera" : "🚫 Bật camera";
+        callCameraButton.setAttribute("aria-pressed", String(track.enabled));
+    });
+}
+if (callScreenButton) callScreenButton.addEventListener("click", toggleCallScreenShare);
+
 async function switchPrivateChat(targetUser, avatar) {
+    finishVideoCall();
     resetMusicSyncSession(true);
     pendingMusicInvite = null;
     if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
@@ -512,6 +969,7 @@ async function switchPrivateChat(targetUser, avatar) {
         oldSocket.close();
     }
     currentRoom = getPrivateRoomId(currentUsername, targetUser);
+    updateVideoCallButton();
     updateMusicShareControls();
     if (headerName) headerName.textContent = targetUser;
     if (headerAvatar) headerAvatar.src = safeAvatarUrl(avatar);
@@ -557,6 +1015,7 @@ function connectWebSocket(room, username) {
             headerStatus.classList.remove("is-online");
         }
         updateMusicShareControls();
+        updateVideoCallButton();
     };
     activeSocket.onmessage = (event) => {
         let data;
@@ -580,9 +1039,17 @@ function connectWebSocket(room, username) {
                 message.querySelector(".content").classList.add("deleted");
                 message.querySelector(".msg-actions")?.remove();
             }
+        } else if (data.type === "call_signal") {
+            handleCallSignal(data);
         } else if (data.type === "music_sync") {
             handleMusicSyncEvent(data);
         } else if (data.type === "error") {
+            if (activeCall) {
+                setCallStatus(data.message);
+                if (data.message.includes("đã đủ") || data.message.includes("không còn hoạt động")) {
+                    finishVideoCall(false);
+                }
+            }
             alert(data.message);
         } else {
             renderMessage(data);
@@ -595,7 +1062,9 @@ function connectWebSocket(room, username) {
         socket = null;
         setPresence(currentTargetUser, false);
         if (musicSyncRoom === room) resetMusicSyncSession(false);
+        if (activeCall?.room === room || pendingCallInvite?.room === room) finishVideoCall(false);
         updateMusicShareControls();
+        updateVideoCallButton();
         if (event.code === 4401) {
             alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
             signOut(false);
