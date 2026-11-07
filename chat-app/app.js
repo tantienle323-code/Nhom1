@@ -60,6 +60,8 @@ const confirmPasswordInput = document.getElementById("confirm-password-input");
 const tabLoginBtn = document.getElementById("tab-login-btn");
 const tabRegisterBtn = document.getElementById("tab-register-btn");
 const authSubmitBtn = document.getElementById("auth-submit-btn");
+const authPanelTitle = document.getElementById("auth-panel-title");
+const authPanelDescription = document.getElementById("auth-panel-description");
 const logoutBtn = document.getElementById("logout-btn");
 const headerName = document.getElementById("header-name");
 const headerAvatar = document.getElementById("header-avatar");
@@ -324,13 +326,17 @@ if (tabLoginBtn) {
     tabLoginBtn.addEventListener("click", () => {
         isRegisterMode = false;
         tabLoginBtn.classList.add("active");
+        tabLoginBtn.setAttribute("aria-pressed", "true");
         if (tabRegisterBtn) tabRegisterBtn.classList.remove("active");
+        if (tabRegisterBtn) tabRegisterBtn.setAttribute("aria-pressed", "false");
         if (confirmPasswordInput) {
             confirmPasswordInput.classList.add("hidden");
             confirmPasswordInput.required = false;
         }
         if (passwordInput) passwordInput.autocomplete = "current-password";
         if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG NHẬP";
+        if (authPanelTitle) authPanelTitle.textContent = "Chào mừng trở lại";
+        if (authPanelDescription) authPanelDescription.textContent = "Đăng nhập để tiếp tục cuộc trò chuyện.";
     });
 }
 
@@ -338,13 +344,17 @@ if (tabRegisterBtn) {
     tabRegisterBtn.addEventListener("click", () => {
         isRegisterMode = true;
         tabRegisterBtn.classList.add("active");
+        tabRegisterBtn.setAttribute("aria-pressed", "true");
         if (tabLoginBtn) tabLoginBtn.classList.remove("active");
+        if (tabLoginBtn) tabLoginBtn.setAttribute("aria-pressed", "false");
         if (confirmPasswordInput) {
             confirmPasswordInput.classList.remove("hidden");
             confirmPasswordInput.required = true;
         }
         if (passwordInput) passwordInput.autocomplete = "new-password";
         if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG KÝ";
+        if (authPanelTitle) authPanelTitle.textContent = "Tạo tài khoản";
+        if (authPanelDescription) authPanelDescription.textContent = "Tạo tài khoản để bắt đầu kết nối.";
     });
 }
 

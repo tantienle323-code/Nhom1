@@ -4,28 +4,51 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261108-audio-player">
+    <link rel="stylesheet" href="style.css?v=20261108-auth-design2">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
     <div id="login-screen" class="tg-auth-container">
         <div class="tg-auth-card">
-            <div class="tg-logo">✈️</div>
-            <p class="tg-auth-eyebrow">KẾT NỐI MỌI LÚC</p>
-            <h2>Ứng dụng chat</h2>
-            <p class="tg-auth-description">Đăng nhập để tiếp tục những cuộc trò chuyện của bạn.</p>
+            <section class="auth-showcase" aria-label="Giới thiệu Chat Realtime">
+                <div class="tg-logo" aria-hidden="true">✈️</div>
+                <p class="tg-auth-eyebrow">KẾT NỐI MỌI LÚC</p>
+                <h2>Ứng dụng chat</h2>
+                <p class="tg-auth-description">Không gian riêng để trò chuyện, chia sẻ khoảnh khắc và luôn giữ kết nối.</p>
+                <div class="auth-preview" aria-hidden="true">
+                    <div class="auth-preview-header"><span></span><i></i><i></i><i></i></div>
+                    <div class="auth-preview-message received">Chào bạn! 👋</div>
+                    <div class="auth-preview-message sent"><span></span><span></span></div>
+                    <div class="auth-preview-message received audio"><b>▶</b><span></span><i>0:08</i></div>
+                </div>
+                <div class="auth-showcase-caption"><span></span> Một cuộc trò chuyện mới đang chờ bạn</div>
+            </section>
+            <section class="auth-panel" aria-label="Đăng nhập hoặc đăng ký">
+                <p class="auth-panel-kicker">BẮT ĐẦU NGAY</p>
+                <h3 id="auth-panel-title" class="auth-panel-title">Chào mừng trở lại</h3>
+                <p id="auth-panel-description" class="auth-panel-description">Đăng nhập để tiếp tục cuộc trò chuyện.</p>
+                <div class="auth-tabs">
+                    <button id="tab-login-btn" class="active" type="button" aria-pressed="true">Đăng nhập</button>
+                    <button id="tab-register-btn" type="button" aria-pressed="false">Đăng ký</button>
+                </div>
 
-            <div class="auth-tabs">
-                <button id="tab-login-btn" class="active">Đăng nhập</button>
-                <button id="tab-register-btn">Đăng ký</button>
-            </div>
-
-            <form id="auth-form" class="auth-form">
-                <input type="text" id="username-input" placeholder="Tên tài khoản (3-30 ký tự, không dấu)..." autocomplete="username" autocapitalize="off" minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]{3,30}" title="Dùng 3-30 chữ cái không dấu, chữ số, dấu chấm, gạch ngang hoặc gạch dưới." required />
-                <input type="password" id="password-input" placeholder="Mật khẩu (ít nhất 8 ký tự)..." autocomplete="current-password" minlength="8" maxlength="72" required />
-                <input type="password" id="confirm-password-input" placeholder="Xác nhận mật khẩu..." autocomplete="new-password" class="hidden" />
-                <button id="auth-submit-btn" class="btn-telegram" type="submit">ĐĂNG NHẬP</button>
-            </form>
+                <form id="auth-form" class="auth-form">
+                    <label class="auth-field">
+                        <span>Tên tài khoản</span>
+                        <input type="text" id="username-input" placeholder="Nhập tên tài khoản" autocomplete="username" autocapitalize="off" minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]{3,30}" title="Dùng 3-30 chữ cái không dấu, chữ số, dấu chấm, gạch ngang hoặc gạch dưới." required />
+                    </label>
+                    <label class="auth-field">
+                        <span>Mật khẩu</span>
+                        <input type="password" id="password-input" placeholder="Nhập mật khẩu" autocomplete="current-password" minlength="8" maxlength="72" required />
+                    </label>
+                    <label class="auth-field auth-confirm-field">
+                        <span>Xác nhận mật khẩu</span>
+                        <input type="password" id="confirm-password-input" placeholder="Nhập lại mật khẩu" autocomplete="new-password" class="hidden" />
+                    </label>
+                    <button id="auth-submit-btn" class="btn-telegram" type="submit">ĐĂNG NHẬP</button>
+                </form>
+                <p class="auth-panel-footer"><span aria-hidden="true">✦</span> Kết nối và chia sẻ cùng mọi người</p>
+            </section>
         </div>
     </div>
 
@@ -400,6 +423,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261108-audio-player"></script>
+    <script src="app.js?v=20261108-auth-design2"></script>
 </body>
 </html>
