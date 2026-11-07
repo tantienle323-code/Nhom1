@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261107-pet-motion">
+    <link rel="stylesheet" href="style.css?v=20261108-audio-player">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
@@ -123,8 +123,9 @@
                     <div><strong id="reply-composer-sender"></strong><p id="reply-composer-text"></p></div>
                     <button id="reply-composer-cancel" type="button" aria-label="Hủy trả lời">×</button>
                 </div>
-                <input type="file" id="file-input" accept="image/*,video/*" style="display: none;" />
-                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh hoặc video" aria-label="Gửi ảnh hoặc video" onclick="document.getElementById('file-input').click()">📎</button>
+                <input type="file" id="file-input" accept="image/*,video/*,audio/*" style="display: none;" />
+                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh, video hoặc âm thanh" aria-label="Gửi ảnh, video hoặc âm thanh" onclick="document.getElementById('file-input').click()">📎</button>
+                <button id="voice-record-btn" class="tg-icon-btn" type="button" title="Ghi tin nhắn thoại" aria-label="Ghi tin nhắn thoại">🎙️</button>
                 <button id="open-camera-btn" class="tg-icon-btn" type="button" title="Chụp ảnh trực tiếp" aria-label="Chụp ảnh trực tiếp">📷</button>
                 <div class="tg-message-composer">
                     <div id="emoji-picker" class="emoji-picker hidden" role="group" aria-label="Chọn emoji"></div>
@@ -399,6 +400,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261107-pet-motion"></script>
+    <script src="app.js?v=20261108-audio-player"></script>
 </body>
 </html>

@@ -647,6 +647,63 @@ input:focus, textarea:focus {
 .msg .content { padding: 10px 14px; border: 1px solid rgba(166, 188, 219, .07); border-radius: 15px; font-size: 13px; line-height: 1.55; }
 .msg.sent .content { border-color: rgba(142, 180, 255, .12); border-bottom-right-radius: 5px; background: linear-gradient(145deg, #294a79, #243e67); }
 .msg.received .content { border-bottom-left-radius: 5px; background: #192538; }
+.audio-message-content {
+    padding: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+.message-audio-player {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 170px;
+    max-width: 240px;
+    margin-top: 8px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    cursor: pointer;
+}
+.message-audio-toggle {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .12);
+    color: #edf3ff;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.message-audio-track {
+    position: relative;
+    flex: 1;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .18);
+    overflow: hidden;
+}
+.message-audio-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    display: block;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #dfeaff, #8aa8ff);
+}
+.message-audio-time {
+    min-width: 32px;
+    color: #dfe9fb;
+    font-size: 9px;
+    text-align: right;
+    flex-shrink: 0;
+}
+.msg.sent .message-audio-player { background: transparent; }
+.msg.received .message-audio-player { background: transparent; }
 .msg .meta { padding: 0 4px; color: #7c8ca3; font-size: 10px; }
 .message-reply-quote { border-left-color: #9eafff; background: rgba(11,18,31,.45); }
 .msg-actions { gap: 10px; padding: 0 4px; }

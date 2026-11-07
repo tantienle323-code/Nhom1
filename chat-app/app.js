@@ -1440,23 +1440,39 @@ function renderMessage(message) {
     } else if (textVal.startsWith("/uploads/")) {
         if (textVal.match(/\.(jpeg|jpg|gif|png|webp)$/i)) {
             const img = document.createElement("img");
-                img.alt = "Ảnh được chia sẻ trong cuộc trò chuyện";
+            img.alt = "Ảnh được chia sẻ trong cuộc trò chuyện";
             img.style.maxWidth = "260px";
             img.style.borderRadius = "8px";
             img.style.marginTop = "4px";
             img.style.display = "block";
             content.append(img);
-                loadProtectedMedia(img, textVal);
-            } else if (textVal.match(/\.(mp4|webm|ogg)$/i)) {
-                const video = document.createElement("video");
-            video.controls = true;
-                video.preload = "metadata";
-                video.style.maxWidth = "260px";
-                video.style.borderRadius = "8px";
-                video.style.marginTop = "4px";
-                video.style.display = "block";
-                content.append(video);
-                loadProtectedMedia(video, textVal);
+            loadProtectedMedia(img, textVal);
+        } else if (textVal.match(/\.(mp4|webm)$/i)) {
+            const video = document.createElement("video");
+            video.controls = !textVal.match(/\.webm$/i);
+            video.preload = "metadata";
+            video.style.maxWidth = "260px";
+            video.style.borderRadius = "8px";
+            video.style.marginTop = "4px";
+            video.style.display = video.controls ? "block" : "none";
+            if (!video.controls) {
+                video.addEventListener("loadedmetadata", () => {
+                    if (video.videoWidth === 0) {
+                        createMessageAudioPlayer(content, video);
+                        return;
+                    }
+                    video.controls = true;
+                    video.style.display = "block";
+                }, { once: true });
+            }
+            content.append(video);
+            loadProtectedMedia(video, textVal);
+        } else if (textVal.match(/\.(mp3|m4a|wav|ogg|weba)$/i)) {
+            const audio = document.createElement("audio");
+            audio.preload = "metadata";
+            content.append(audio);
+            createMessageAudioPlayer(content, audio);
+            loadProtectedMedia(audio, textVal);
         } else {
             const body = document.createElement("span");
             body.textContent = textVal;
@@ -1553,6 +1569,94 @@ function renderMessage(message) {
         item.append(actions, reactionPicker);
     }
     messagesContainer.append(item);
+}
+
+function createMessageAudioPlayer(content, media) {
+    content.classList.add("audio-message-content");
+    media.style.display = "none";
+
+    const player = document.createElement("div");
+    player.className = "message-audio-player";
+    player.setAttribute("role", "button");
+    player.setAttribute("tabindex", "0");
+    player.setAttribute("aria-label", "Phát âm thanh");
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "message-audio-toggle";
+    toggle.textContent = "▶";
+    toggle.setAttribute("aria-label", "Phát âm thanh");
+
+    const track = document.createElement("div");
+    track.className = "message-audio-track";
+    const fill = document.createElement("span");
+    fill.className = "message-audio-fill";
+    fill.style.width = "0%";
+    const time = document.createElement("span");
+    time.className = "message-audio-time";
+    time.textContent = "0:00";
+    track.append(fill);
+    player.append(toggle, track, time);
+    content.append(player);
+
+    const syncProgress = () => {
+        if (!media.duration || Number.isNaN(media.duration)) {
+            fill.style.width = "0%";
+            time.textContent = "0:00";
+            return;
+        }
+        fill.style.width = `${Math.min(100, Math.max(0, (media.currentTime / media.duration) * 100))}%`;
+        const minutes = Math.floor(media.currentTime / 60);
+        const seconds = Math.floor(media.currentTime % 60);
+        time.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    };
+
+    const updateToggleState = () => {
+        toggle.textContent = media.paused ? "▶" : "❚❚";
+        player.setAttribute("aria-label", media.paused ? "Phát âm thanh" : "Dừng âm thanh");
+    };
+
+    const togglePlayback = async () => {
+        if (!media.src) return;
+        if (media.paused) {
+            try {
+                await media.play();
+            } catch (error) {
+                console.error("Không thể phát âm thanh:", error);
+            }
+        } else {
+            media.pause();
+        }
+        updateToggleState();
+    };
+
+    toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        togglePlayback();
+    });
+    player.addEventListener("click", togglePlayback);
+    player.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            togglePlayback();
+        }
+    });
+    media.addEventListener("loadedmetadata", () => {
+        if (!Number.isNaN(media.duration) && media.duration > 0) {
+            const minutes = Math.floor(media.duration / 60);
+            const seconds = Math.floor(media.duration % 60);
+            time.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;
+        }
+    });
+    media.addEventListener("timeupdate", syncProgress);
+    media.addEventListener("play", updateToggleState);
+    media.addEventListener("pause", updateToggleState);
+    media.addEventListener("ended", () => {
+        fill.style.width = "0%";
+        time.textContent = "0:00";
+        updateToggleState();
+    });
+    updateToggleState();
 }
 
 const MESSAGE_REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -2512,6 +2616,28 @@ if (emojiPicker && emojiPickerButton) {
 }
 
 const fileInput = document.getElementById("file-input");
+const voiceRecordButton = document.getElementById("voice-record-btn");
+
+function getSupportedAudioMimeType() {
+    if (!window.MediaRecorder) return "";
+    const preferredMimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+        "audio/mpeg",
+    ];
+    return preferredMimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
+}
+
+let voiceRecorder = null;
+let voiceRecorderStream = null;
+let voiceRecorderChunks = [];
+let voiceRecordingRoom = "";
+let voiceRecordingSocket = null;
+let isVoiceRecording = false;
+
 async function sendChatFile(file, expectedRoom = currentRoom, expectedSocket = socket) {
     if (!currentRoom) {
         alert("Vui lòng chọn người cần nhắn trước khi đính kèm tệp.");
@@ -2560,6 +2686,97 @@ if (fileInput) {
         if (!file) return;
         await sendChatFile(file);
         fileInput.value = "";
+    });
+}
+
+async function startVoiceRecording() {
+    if (!currentRoom) return alert("Vui lòng chọn một cuộc trò chuyện trước khi ghi thoại.");
+    if (!navigator.mediaDevices?.getUserMedia) {
+        return alert("Trình duyệt không hỗ trợ ghi âm thoại. Hãy thử trên HTTPS hoặc trình duyệt khác.");
+    }
+    if (!window.MediaRecorder) {
+        return alert("Trình duyệt không hỗ trợ ghi âm cho tin nhắn thoại.");
+    }
+
+    const requestedRoom = currentRoom;
+    const requestedSocket = socket;
+    try {
+        voiceRecorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = getSupportedAudioMimeType();
+        voiceRecorder = new MediaRecorder(voiceRecorderStream, mimeType ? { mimeType } : undefined);
+        voiceRecorderChunks = [];
+        voiceRecorderRoom = requestedRoom;
+        voiceRecordingSocket = requestedSocket;
+        isVoiceRecording = true;
+        if (voiceRecordButton) {
+            voiceRecordButton.textContent = "⏹️";
+            voiceRecordButton.title = "Dừng ghi tin nhắn thoại";
+            voiceRecordButton.setAttribute("aria-label", "Dừng ghi tin nhắn thoại");
+        }
+
+        voiceRecorder.ondataavailable = (event) => {
+            if (event.data?.size) voiceRecorderChunks.push(event.data);
+        };
+
+        voiceRecorder.onstop = async () => {
+            const stream = voiceRecorderStream;
+            voiceRecorderStream = null;
+            voiceRecorder = null;
+            if (stream) stream.getTracks().forEach((track) => track.stop());
+            if (!voiceRecorderChunks.length) {
+                isVoiceRecording = false;
+                if (voiceRecordButton) {
+                    voiceRecordButton.textContent = "🎙️";
+                    voiceRecordButton.title = "Ghi tin nhắn thoại";
+                    voiceRecordButton.setAttribute("aria-label", "Ghi tin nhắn thoại");
+                }
+                return;
+            }
+            const mimeType = voiceRecorderChunks[0]?.type || getSupportedAudioMimeType() || "audio/webm";
+            const audioBlob = new Blob(voiceRecorderChunks, { type: mimeType });
+            const audioFile = new File([
+                audioBlob,
+            ], `voice-${Date.now()}.${mimeType.includes("mp4") ? "m4a" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("wav") ? "wav" : "webm"}`, {
+                type: mimeType,
+            });
+            isVoiceRecording = false;
+            if (voiceRecordButton) {
+                voiceRecordButton.textContent = "🎙️";
+                voiceRecordButton.title = "Ghi tin nhắn thoại";
+                voiceRecordButton.setAttribute("aria-label", "Ghi tin nhắn thoại");
+            }
+            await sendChatFile(audioFile, voiceRecorderRoom, voiceRecordingSocket);
+            voiceRecorderRoom = "";
+            voiceRecordingSocket = null;
+        };
+
+        voiceRecorder.start();
+    } catch (error) {
+        voiceRecorderStream?.getTracks().forEach((track) => track.stop());
+        voiceRecorderStream = null;
+        voiceRecorder = null;
+        isVoiceRecording = false;
+        if (voiceRecordButton) {
+            voiceRecordButton.textContent = "🎙️";
+            voiceRecordButton.title = "Ghi tin nhắn thoại";
+            voiceRecordButton.setAttribute("aria-label", "Ghi tin nhắn thoại");
+        }
+        alert(error.message || "Không thể truy cập microphone để ghi tin nhắn thoại.");
+    }
+}
+
+function stopVoiceRecording() {
+    if (!voiceRecorder || !isVoiceRecording) return;
+    voiceRecorder.stop();
+}
+
+if (voiceRecordButton) {
+    voiceRecordButton.addEventListener("click", () => {
+        if (isVoiceRecording) {
+            stopVoiceRecording();
+            return;
+        }
+        startVoiceRecording();
     });
 }
 

@@ -2749,12 +2749,18 @@ UPLOAD_TYPES = {
     "image/jpeg": (".jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
     "image/png": (".png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
     "image/gif": (".gif", lambda data: data.startswith((b"GIF87a", b"GIF89a"))),
-    "image/webp":(
+    "image/webp": (
         ".webp",
         lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP",
     ),
     "video/mp4": (".mp4", lambda data: len(data) >= 8 and data[4:8] == b"ftyp"),
     "video/webm": (".webm", lambda data: data.startswith(b"\x1a\x45\xdf\xa3")),
+    "audio/mpeg": (".mp3", lambda data: data.startswith((b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))),
+    "audio/mp3": (".mp3", lambda data: data.startswith((b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))),
+    "audio/ogg": (".ogg", lambda data: data.startswith(b"OggS")),
+    "audio/wav": (".wav", lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WAVE"),
+    "audio/webm": (".webm", lambda data: data.startswith(b"\x1a\x45\xdf\xa3")),
+    "audio/mp4": (".m4a", lambda data: len(data) >= 8 and data[4:8] == b"ftyp"),
 }
 
 
@@ -2765,11 +2771,35 @@ async def upload_file(
     _: Annotated[str, Depends(get_current_username)],
 ):
     temporary_path: Path | None = None
+    normalized_content_type = (getattr(file, "content_type", "") or "").split(";")[0].strip().lower()
+    inferred_extension = ""
+    filename_value = getattr(file, "filename", None)
+    if filename_value:
+        suffix = Path(str(filename_value)).suffix.lower()
+        if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm", ".mp3", ".ogg", ".wav", ".m4a"}:
+            inferred_extension = suffix
+
     try:
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES + 1024 * 1024:
             raise HTTPException(status_code=413, detail="Tệp vượt quá giới hạn 20 MB.")
-        upload_type = UPLOAD_TYPES.get(file.content_type or "")
+
+        upload_type = UPLOAD_TYPES.get(normalized_content_type)
+        if not upload_type and inferred_extension:
+            upload_type = {
+                ".jpg": (".jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
+                ".jpeg": (".jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
+                ".png": (".png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
+                ".gif": (".gif", lambda data: data.startswith((b"GIF87a", b"GIF89a"))),
+                ".webp": (".webp", lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"),
+                ".mp4": (".mp4", lambda data: len(data) >= 8 and data[4:8] == b"ftyp"),
+                ".webm": (".webm", lambda data: data.startswith(b"\x1a\x45\xdf\xa3")),
+                ".mp3": (".mp3", lambda data: data.startswith((b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))),
+                ".ogg": (".ogg", lambda data: data.startswith(b"OggS")),
+                ".wav": (".wav", lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WAVE"),
+                ".m4a": (".m4a", lambda data: len(data) >= 8 and data[4:8] == b"ftyp"),
+            }.get(inferred_extension)
+
         if not upload_type:
             raise HTTPException(status_code=400, detail="Định dạng tệp không được hỗ trợ.")
 
@@ -2795,9 +2825,17 @@ async def upload_file(
             temporary_path.unlink()
         await file.close()
 
+    media_category = (
+        "image" if normalized_content_type.startswith("image/")
+        else "audio" if normalized_content_type.startswith("audio/")
+        else "video"
+    )
+    if media_category == "video" and inferred_extension in {".mp3", ".wav", ".ogg", ".m4a"}:
+        media_category = "audio"
+
     return {
         "url": f"/uploads/{filename}",
-        "type": "image" if file.content_type.startswith("image/") else "video",
+        "type": media_category,
     }
 
 
@@ -2807,7 +2845,7 @@ async def get_uploaded_file(
     username: Annotated[str, Depends(get_current_username)],
 ):
     if not re.fullmatch(
-        r"(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.(?:jpeg|jpg|png|gif|webp|mp4|webm)",
+        r"(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.(?:jpeg|jpg|png|gif|webp|mp4|webm|mp3|ogg|wav|m4a)",
         filename,
     ):
         raise HTTPException(status_code=404, detail="Không tìm thấy tệp.")
@@ -2833,7 +2871,11 @@ async def get_uploaded_file(
         ".webp": "image/webp",
         ".mp4": "video/mp4",
         ".webm": "video/webm",
-    }[file_path.suffix]
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+    }.get(file_path.suffix.lower(), "application/octet-stream")
     return FileResponse(
         file_path,
         media_type=media_type,
