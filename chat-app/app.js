@@ -1,10 +1,5 @@
-<<<<<<< HEAD
-const API_BASE = window.CHAT_API_URL || `${window.location.protocol}//${window.location.host}`;
-const WS_BASE = window.CHAT_WS_URL || `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
-=======
 const API_BASE = window.CHAT_API_URL || location.origin;
 const WS_BASE = window.CHAT_WS_URL || `${API_BASE.startsWith("https:") ? "wss" : "ws"}://${new URL(API_BASE).host}/ws`;
->>>>>>> 5bc39dddd899284dd1fe7942bc70125ac76a4ef8
 const API_URL = `${API_BASE}/api`;
 const TOKEN_KEY = "chat_access_token";
 const DEFAULT_AVATAR = "https://via.placeholder.com/44";
