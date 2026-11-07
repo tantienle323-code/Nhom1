@@ -9,14 +9,16 @@ import os
 import re
 import secrets
 import tempfile
+import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date, datetime as DateTime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
 import bcrypt
 from bson import ObjectId
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -27,7 +29,9 @@ from starlette.websockets import WebSocketDisconnected
 
 from database import (
     database,
+    chat_state_collection,
     message_collection,
+    perspective_topic_collection,
     user_collection,
     world_game_collection,
     world_memory_collection,
@@ -63,6 +67,8 @@ if ADMIN_PASSWORD and (len(ADMIN_PASSWORD) < 8 or len(ADMIN_PASSWORD.encode("utf
 async def lifespan(_: FastAPI):
     try:
         await user_collection.create_index("username", unique=True)
+        await message_collection.create_index([("room", 1), ("_id", -1)])
+        await message_collection.create_index([("room", 1), ("sender", 1), ("_id", -1)])
         if ADMIN_USERNAME:
             admin = await user_collection.find_one({"username": ADMIN_USERNAME})
             if not admin:
@@ -225,6 +231,235 @@ class GroupCreateSchema(BaseModel):
         return values
 
 
+class PerspectiveTopicSchema(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    situation: str = Field(min_length=1, max_length=2000)
+    initial_thought: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("title", "situation", "initial_thought")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Thông tin không được để trống.")
+        return value
+
+
+class PerspectiveResponseSchema(BaseModel):
+    answer: str = Field(min_length=1, max_length=2000)
+    assumption: str = Field(default="", max_length=500)
+    direction: str = Field(default="", max_length=100)
+
+    @field_validator("answer")
+    @classmethod
+    def normalize_required_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Câu trả lời không được để trống.")
+        return value
+
+    @field_validator("assumption", "direction")
+    @classmethod
+    def normalize_response_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class PinnedRoomSchema(BaseModel):
+    room: str = Field(min_length=1, max_length=100)
+    pinned: bool
+
+
+PERSPECTIVE_ROLES = (
+    ("Người trong cuộc", "Hãy suy nghĩ như người đang trực tiếp đối mặt tình huống."),
+    ("Gia đình", "Hãy nhìn vấn đề từ góc độ gia đình và những người thân."),
+    ("Tài chính", "Hãy cân nhắc thu nhập, chi phí và sự ổn định tài chính."),
+    ("Rủi ro bị bỏ sót", "Hãy tìm những rủi ro hoặc hệ quả mà mọi người chưa nhận thấy."),
+    ("Học tập & mục tiêu", "Hãy đặt việc học và mục tiêu cá nhân ở góc nhìn trung tâm."),
+    ("Cơ hội dài hạn", "Hãy cân nhắc cơ hội và ảnh hưởng trong dài hạn."),
+    ("Người bạn thân", "Hãy nhìn vấn đề như một người bạn thân muốn lắng nghe và hỗ trợ."),
+)
+
+
+COMMON_WORDS = {
+    "những", "trong", "được", "không", "người", "mình", "chúng", "với", "của",
+    "một", "các", "đang", "này", "đó", "thì", "là", "và", "hay", "nếu", "khi",
+    "cần", "nên", "phải", "sẽ", "có", "cho", "để", "về", "đến", "từ", "theo",
+    "việc", "hơn", "cũng", "rằng", "vì", "tôi", "em", "anh", "chị", "bạn",
+}
+MESSAGE_REACTIONS = {"👍", "❤️", "😂", "😮", "😢", "🙏"}
+MESSAGE_RATE_LIMIT = 8
+MESSAGE_RATE_WINDOW_SECONDS = 10
+message_rate_events: dict[tuple[str, str], list[float]] = {}
+message_rate_lock = asyncio.Lock()
+
+
+def chat_room_state_id(username: str, room: str) -> str:
+    return hashlib.sha256(f"{username}\0{room}".encode("utf-8")).hexdigest()
+
+
+async def available_chat_rooms(username: str, pinned_rooms: list[str]) -> list[str]:
+    try:
+        users = await user_collection.find(
+            {"username": {"$ne": username}}, {"username": 1, "_id": 0}
+        ).to_list(length=5000)
+        groups = await database["groups"].find(
+            {"members": username}, {"_id": 1}
+        ).to_list(length=500)
+        active_rooms = await message_collection.distinct(
+            "room", {"sender": {"$ne": username}}
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải trạng thái cuộc trò chuyện.") from exc
+    private_rooms = {
+        private_room_id(username, user["username"])
+        for user in users
+    }
+    group_rooms = {group["_id"] for group in groups}
+    known_rooms = private_rooms | group_rooms
+    return list(
+        (set(active_rooms) & known_rooms)
+        | (set(pinned_rooms) & known_rooms)
+    )
+
+
+async def allow_chat_message(room: str, username: str) -> bool:
+    now = time.monotonic()
+    key = (room, username)
+    async with message_rate_lock:
+        recent = [
+            timestamp
+            for timestamp in message_rate_events.get(key, [])
+            if now - timestamp < MESSAGE_RATE_WINDOW_SECONDS
+        ]
+        if len(recent) >= MESSAGE_RATE_LIMIT:
+            message_rate_events[key] = recent
+            return False
+        recent.append(now)
+        message_rate_events[key] = recent
+        if len(message_rate_events) > 5000:
+            for stale_key in [
+                event_key for event_key, events in message_rate_events.items()
+                if not events or now - events[-1] >= MESSAGE_RATE_WINDOW_SECONDS
+            ]:
+                message_rate_events.pop(stale_key, None)
+    return True
+
+
+def build_message_reaction_summary(reactions: dict) -> list[dict[str, object]]:
+    grouped: dict[str, list[str]] = {}
+    for reaction in reactions.values():
+        emoji = reaction.get("emoji")
+        username = reaction.get("username")
+        if emoji in MESSAGE_REACTIONS and isinstance(username, str):
+            grouped.setdefault(emoji, []).append(username)
+    return [
+        {"emoji": emoji, "count": len(usernames), "users": sorted(usernames)}
+        for emoji, usernames in sorted(grouped.items())
+    ]
+
+
+def assign_perspective_roles(members: list[str]) -> dict[str, dict[str, str]]:
+    roles = list(PERSPECTIVE_ROLES)
+    secrets.SystemRandom().shuffle(roles)
+    assignments = {}
+    for index, member in enumerate(members):
+        role_name, prompt = roles[index % len(roles)]
+        if index >= len(roles):
+            role_name = f"{role_name} ({index // len(roles) + 1})"
+        assignments[member] = {"name": role_name, "prompt": prompt}
+    return assignments
+
+
+def perspective_response_key(username: str) -> str:
+    return hashlib.sha256(username.encode("utf-8")).hexdigest()
+
+
+def build_perspective_map(
+    responses: dict[str, dict[str, str]],
+    roles: dict[str, dict[str, str]],
+) -> dict:
+    directions: dict[str, dict] = {}
+    word_counts: dict[str, int] = {}
+    for username, response in responses.items():
+        direction = response.get("direction", "").strip()
+        if direction:
+            normalized = direction.casefold()
+            direction_group = directions.setdefault(normalized, {"label": direction, "roles": []})
+            direction_group["roles"].append(roles[username]["name"])
+        answer_words = {
+            word.casefold()
+            for word in re.findall(r"[^\W_]+", response.get("answer", ""), flags=re.UNICODE)
+            if len(word) > 2 and word.casefold() not in COMMON_WORDS
+        }
+        for word in answer_words:
+            word_counts[word] = word_counts.get(word, 0) + 1
+
+    return {
+        "common_words": [
+            {"word": word, "count": count}
+            for word, count in sorted(
+                word_counts.items(), key=lambda item: (-item[1], item[0])
+            )
+            if count > 1
+        ][:8],
+        "directions": list(directions.values()),
+    }
+
+
+async def require_perspective_group(group_id: str, username: str) -> dict:
+    try:
+        group = await database["groups"].find_one(
+            {"_id": group_id, "members": username}
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể xác thực thành viên nhóm.") from exc
+    if not group:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhóm hoặc bạn không thuộc nhóm này.")
+    return group
+
+
+def present_perspective_topic(topic: dict, username: str) -> dict:
+    responses = topic.get("responses", {})
+    response_key = perspective_response_key(username)
+    revealed = topic.get("status") == "revealed"
+    result = {
+        "id": topic["_id"],
+        "title": topic["title"],
+        "situation": topic["situation"],
+        "creator": topic["creator"],
+        "status": topic["status"],
+        "member_count": len(topic["members"]),
+        "submitted_count": len(responses),
+        "own_role": topic["roles"].get(username),
+        "own_submitted": response_key in responses,
+        "created_at": topic["created_at"].isoformat(),
+    }
+    if revealed:
+        perspectives = [
+            {
+                "username": member,
+                "role": topic["roles"][member]["name"],
+                **responses[perspective_response_key(member)],
+            }
+            for member in topic["members"]
+            if perspective_response_key(member) in responses
+        ]
+        perspectives.sort(key=lambda perspective: perspective["role"])
+        result["initial_thought"] = topic["initial_thought"]
+        result["perspectives"] = perspectives
+        visible_responses = {
+            member: responses[perspective_response_key(member)]
+            for member in topic["members"]
+            if perspective_response_key(member) in responses
+        }
+        result["map"] = build_perspective_map(visible_responses, topic["roles"])
+    elif username == topic["creator"]:
+        result["initial_thought"] = topic["initial_thought"]
+    if not revealed and response_key in responses:
+        result["own_response"] = responses[response_key]
+    return result
+
+
 WORLD_STAGES = (
     (0, "Bến gặp gỡ", "Một thế giới nhỏ bắt đầu từ cuộc trò chuyện của hai bạn.", "🏝️"),
     (10, "Con đường chung", "Mỗi lần ghé thăm lại mở thêm một lối đi.", "🛤️"),
@@ -378,8 +613,179 @@ async def get_messages(room: str, username: Annotated[str, Depends(get_current_u
         raise HTTPException(status_code=503, detail="Không thể tải tin nhắn.") from exc
     for message in messages:
         message["_id"] = str(message["_id"])
+        message["reactions"] = build_message_reaction_summary(message.get("reactions", {}))
     messages.reverse()
     return messages
+
+
+@app.get("/api/messages/{room}/search")
+async def search_room_messages(
+    room: str,
+    username: Annotated[str, Depends(get_current_username)],
+    q: str = Query(min_length=2, max_length=100),
+    sender: str | None = Query(default=None, min_length=3, max_length=30),
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    if not await is_room_member(room, username):
+        raise HTTPException(status_code=403, detail="Bạn không thuộc cuộc trò chuyện này.")
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.")
+    if len(q.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Từ khóa cần có ít nhất 2 ký tự.")
+    if date_to == date.max:
+        raise HTTPException(status_code=400, detail="Ngày kết thúc không hợp lệ.")
+    query: dict = {
+        "room": room,
+        "content": {"$regex": re.escape(q.strip()), "$options": "i"},
+        "is_deleted": {"$ne": True},
+    }
+    if sender:
+        query["sender"] = sender
+    object_id_range: dict = {}
+    if date_from:
+        start = DateTime.combine(date_from, datetime_time.min, tzinfo=timezone.utc)
+        object_id_range["$gte"] = ObjectId.from_datetime(start)
+    if date_to:
+        end = DateTime.combine(date_to + timedelta(days=1), datetime_time.min, tzinfo=timezone.utc)
+        object_id_range["$lt"] = ObjectId.from_datetime(end)
+    if object_id_range:
+        query["_id"] = object_id_range
+    try:
+        messages = await (
+            message_collection.find(query)
+            .sort("_id", -1)
+            .limit(50)
+            .to_list(length=50)
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tìm tin nhắn.") from exc
+    for message in messages:
+        message["_id"] = str(message["_id"])
+        message["reactions"] = build_message_reaction_summary(message.get("reactions", {}))
+    return messages
+
+
+@app.get("/api/messages/{room}/by-id/{message_id}")
+async def get_room_message(
+    room: str,
+    message_id: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not await is_room_member(room, username):
+        raise HTTPException(status_code=403, detail="Bạn không thuộc cuộc trò chuyện này.")
+    if not ObjectId.is_valid(message_id):
+        raise HTTPException(status_code=400, detail="Mã tin nhắn không hợp lệ.")
+    try:
+        message = await message_collection.find_one({
+            "_id": ObjectId(message_id),
+            "room": room,
+        })
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải tin nhắn.") from exc
+    if not message:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tin nhắn trong cuộc trò chuyện.")
+    message["_id"] = str(message["_id"])
+    message["reactions"] = build_message_reaction_summary(message.get("reactions", {}))
+    return message
+
+
+@app.get("/api/chat-state")
+async def get_chat_state(username: Annotated[str, Depends(get_current_username)]):
+    try:
+        preferences = await chat_state_collection.find_one({"_id": username}) or {}
+        requested_pinned_rooms = preferences.get("pinned_rooms", [])
+        rooms = await available_chat_rooms(username, requested_pinned_rooms)
+        pinned_rooms = [
+            room for room in requested_pinned_rooms
+            if room in rooms
+        ]
+        unread_counts: dict[str, int] = {}
+        for room in rooms:
+            cursor_id = chat_room_state_id(username, room)
+            cursor_state = await chat_state_collection.find_one({"_id": cursor_id})
+            unread_query = {
+                "room": room,
+                "sender": {"$ne": username},
+                "is_deleted": {"$ne": True},
+            }
+            read_cursor = cursor_state.get("read_cursor", "") if cursor_state else ""
+            if ObjectId.is_valid(read_cursor):
+                unread_query["_id"] = {"$gt": ObjectId(read_cursor)}
+            unread_count = await message_collection.count_documents(unread_query)
+            if unread_count:
+                unread_counts[room] = unread_count
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải trạng thái cuộc trò chuyện.") from exc
+    return {
+        "pinned_rooms": pinned_rooms,
+        "unread_counts": unread_counts,
+        "total_unread": sum(unread_counts.values()),
+    }
+
+
+@app.put("/api/chat-state/pinned")
+async def set_pinned_room(
+    data: PinnedRoomSchema,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not await is_room_member(data.room, username):
+        raise HTTPException(status_code=403, detail="Bạn không thuộc cuộc trò chuyện này.")
+    operation = "$addToSet" if data.pinned else "$pull"
+    try:
+        await chat_state_collection.update_one(
+            {"_id": username},
+            {operation: {"pinned_rooms": data.room}},
+            upsert=True,
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể cập nhật cuộc trò chuyện đã ghim.") from exc
+    return {"room": data.room, "pinned": data.pinned}
+
+
+@app.post("/api/chat-state/read/{room}")
+async def mark_chat_read(
+    room: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not await is_room_member(room, username):
+        raise HTTPException(status_code=403, detail="Bạn không thuộc cuộc trò chuyện này.")
+    try:
+        latest = await message_collection.find_one(
+            {"room": room}, {"_id": 1}, sort=[("_id", -1)]
+        )
+        if not latest:
+            latest_id = ObjectId.from_datetime(
+                datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+            )
+        else:
+            latest_id = latest["_id"]
+        read_cursor = str(latest_id)
+        await chat_state_collection.update_one(
+            {"_id": chat_room_state_id(username, room)},
+            {
+                "$set": {
+                    "username": username,
+                    "room": room,
+                    "read_cursor": read_cursor,
+                }
+            },
+            upsert=True,
+        )
+        reader_key = hashlib.sha256(username.encode("utf-8")).hexdigest()
+        await message_collection.update_many(
+            {
+                "room": room,
+                "_id": {"$lte": latest_id},
+                "sender": {"$ne": username},
+                "is_deleted": {"$ne": True},
+            },
+            {"$set": {f"read_by.{reader_key}": username}},
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể cập nhật trạng thái đã đọc.") from exc
+    await manager.broadcast_to_room(room, {"type": "read_receipt", "reader": username})
+    return {"status": "ok", "read_cursor": read_cursor}
 
 
 async def require_world_room(other_username: str, username: str) -> str:
@@ -1466,18 +1872,121 @@ async def websocket_endpoint(
                 if not isinstance(content, str) or not content.strip() or len(content) > 2000:
                     await send_socket_error(websocket, "Tin nhắn phải có từ 1 đến 2000 ký tự.")
                     continue
+                if not await allow_chat_message(room, username):
+                    await send_socket_error(websocket, "Bạn gửi tin quá nhanh. Vui lòng chờ vài giây.")
+                    continue
+                reply_to = None
+                reply_to_id = data.get("reply_to")
+                if reply_to_id is not None:
+                    if not isinstance(reply_to_id, str) or not ObjectId.is_valid(reply_to_id):
+                        await send_socket_error(websocket, "Tin nhắn được trả lời không hợp lệ.")
+                        continue
+                    parent_message = await message_collection.find_one({
+                        "_id": ObjectId(reply_to_id),
+                        "room": room,
+                        "is_deleted": {"$ne": True},
+                    })
+                    if not parent_message:
+                        await send_socket_error(websocket, "Tin nhắn gốc không còn khả dụng.")
+                        continue
+                    reply_to = {
+                        "id": str(parent_message["_id"]),
+                        "sender": parent_message.get("sender", ""),
+                        "content": parent_message.get("content", "")[:240],
+                    }
                 message = {
                     "type": "chat",
                     "room": room,
                     "sender": username,
                     "content": content.strip(),
                     "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M"),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc),
                     "is_edited": False,
                     "is_deleted": False,
+                    "delivered_to": [],
+                    "read_by": {},
                 }
+                if reply_to:
+                    message["reply_to"] = reply_to
                 result = await message_collection.insert_one(message)
                 message["_id"] = str(result.inserted_id)
+                message["created_at"] = message["created_at"].isoformat()
                 await manager.broadcast_to_room(room, message)
+            elif msg_type == "message_delivered":
+                message_id = data.get("message_id")
+                if not isinstance(message_id, str) or not ObjectId.is_valid(message_id):
+                    await send_socket_error(websocket, "Mã tin nhắn không hợp lệ.")
+                    continue
+                message_query = {
+                    "_id": ObjectId(message_id),
+                    "room": room,
+                    "sender": {"$ne": username},
+                    "is_deleted": {"$ne": True},
+                }
+                message = await message_collection.find_one(message_query, {"_id": 1})
+                if not message:
+                    continue
+                await message_collection.update_one(
+                    message_query,
+                    {"$addToSet": {"delivered_to": username}},
+                )
+                updated_message = await message_collection.find_one(
+                    {"_id": ObjectId(message_id), "room": room},
+                    {"delivered_to": 1},
+                )
+                delivered_to = updated_message.get("delivered_to", []) if updated_message else []
+                await manager.broadcast_to_room(room, {
+                    "type": "delivery_receipt",
+                    "message_id": message_id,
+                    "recipient": username,
+                    "delivered_to": delivered_to,
+                })
+            elif msg_type == "reaction":
+                message_id = data.get("message_id")
+                emoji = data.get("emoji")
+                if not isinstance(message_id, str) or not ObjectId.is_valid(message_id):
+                    await send_socket_error(websocket, "Mã tin nhắn không hợp lệ.")
+                    continue
+                if not isinstance(emoji, str) or emoji not in MESSAGE_REACTIONS:
+                    await send_socket_error(websocket, "Cảm xúc không được hỗ trợ.")
+                    continue
+
+                message_query = {
+                    "_id": ObjectId(message_id),
+                    "room": room,
+                    "is_deleted": {"$ne": True},
+                }
+                message = await message_collection.find_one(message_query)
+                if not message:
+                    await send_socket_error(websocket, "Tin nhắn không còn khả dụng để thả cảm xúc.")
+                    continue
+                reaction_key = hashlib.sha256(username.encode("utf-8")).hexdigest()
+                existing_reaction = message.get("reactions", {}).get(reaction_key)
+                update = (
+                    {"$unset": {f"reactions.{reaction_key}": ""}}
+                    if existing_reaction and existing_reaction.get("emoji") == emoji
+                    else {
+                        "$set": {
+                            f"reactions.{reaction_key}": {
+                                "username": username,
+                                "emoji": emoji,
+                            }
+                        }
+                    }
+                )
+                result = await message_collection.update_one(message_query, update)
+                if not result.matched_count:
+                    await send_socket_error(websocket, "Tin nhắn không còn khả dụng để thả cảm xúc.")
+                    continue
+                updated_message = await message_collection.find_one(message_query, {"reactions": 1})
+                if not updated_message:
+                    await send_socket_error(websocket, "Tin nhắn không còn khả dụng để thả cảm xúc.")
+                    continue
+                await manager.broadcast_to_room(room, {
+                    "type": "reaction_update",
+                    "_id": message_id,
+                    "reactions": build_message_reaction_summary(updated_message.get("reactions", {})),
+                })
             elif msg_type == "call_signal":
                 action = data.get("action")
                 call_id = data.get("call_id")
@@ -1666,6 +2175,7 @@ async def websocket_endpoint(
                     event = {"type": msg_type, "_id": message_id, "new_content": new_content.strip()}
                 else:
                     update = {"$set": {"content": "Tin nhắn đã được thu hồi", "is_deleted": True}}
+                    update["$unset"] = {"reactions": ""}
                     event = {"type": msg_type, "_id": message_id}
                 result = await message_collection.update_one(query, update)
                 if not result.matched_count:
@@ -1775,8 +2285,103 @@ async def get_group_messages(
     for message in messages:
         message["_id"] = str(message["_id"])
         message.setdefault("room", group_id)
+        message["reactions"] = build_message_reaction_summary(message.get("reactions", {}))
     messages.reverse()
     return messages
+
+
+@app.get("/api/groups/{group_id}/perspective-topics")
+async def get_perspective_topics(
+    group_id: str,
+    current_user: Annotated[str, Depends(get_current_username)],
+):
+    await require_perspective_group(group_id, current_user)
+    try:
+        topics = (
+            await perspective_topic_collection.find({"room": group_id})
+            .sort("created_at", -1)
+            .limit(30)
+            .to_list(length=30)
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải các chủ đề đổi góc nhìn.") from exc
+    return [present_perspective_topic(topic, current_user) for topic in topics]
+
+
+@app.post("/api/groups/{group_id}/perspective-topics", status_code=201)
+async def create_perspective_topic(
+    group_id: str,
+    data: PerspectiveTopicSchema,
+    current_user: Annotated[str, Depends(get_current_username)],
+):
+    group = await require_perspective_group(group_id, current_user)
+    members = group.get("members", [])
+    if len(members) < 2:
+        raise HTTPException(status_code=400, detail="Cần ít nhất hai thành viên để đổi góc nhìn.")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    topic = {
+        "_id": uuid.uuid4().hex,
+        "room": group_id,
+        "title": data.title,
+        "situation": data.situation,
+        "initial_thought": data.initial_thought,
+        "creator": current_user,
+        "members": members,
+        "roles": assign_perspective_roles(members),
+        "responses": {},
+        "status": "active",
+        "created_at": now,
+    }
+    try:
+        await perspective_topic_collection.insert_one(topic)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tạo chủ đề đổi góc nhìn.") from exc
+    return present_perspective_topic(topic, current_user)
+
+
+@app.post("/api/groups/{group_id}/perspective-topics/{topic_id}/responses")
+async def submit_perspective_response(
+    group_id: str,
+    topic_id: str,
+    data: PerspectiveResponseSchema,
+    current_user: Annotated[str, Depends(get_current_username)],
+):
+    await require_perspective_group(group_id, current_user)
+    try:
+        topic = await perspective_topic_collection.find_one({"_id": topic_id, "room": group_id})
+        if not topic:
+            raise HTTPException(status_code=404, detail="Không tìm thấy chủ đề đổi góc nhìn.")
+        if current_user not in topic.get("members", []):
+            raise HTTPException(status_code=403, detail="Bạn không tham gia chủ đề này.")
+        if topic.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Chủ đề đã được mở gương, không thể sửa câu trả lời.")
+
+        result = await perspective_topic_collection.update_one(
+            {"_id": topic_id, "room": group_id, "status": "active"},
+            {
+                "$set": {
+                    f"responses.{perspective_response_key(current_user)}": data.model_dump()
+                }
+            },
+        )
+        if not result.matched_count:
+            raise HTTPException(status_code=409, detail="Chủ đề vừa được mở gương.")
+
+        topic = await perspective_topic_collection.find_one({"_id": topic_id, "room": group_id})
+        if len(topic.get("responses", {})) == len(topic.get("members", [])):
+            await perspective_topic_collection.update_one(
+                {"_id": topic_id, "room": group_id, "status": "active"},
+                {
+                    "$set": {
+                        "status": "revealed",
+                        "revealed_at": datetime.datetime.now(datetime.timezone.utc),
+                    }
+                },
+            )
+            topic = await perspective_topic_collection.find_one({"_id": topic_id, "room": group_id})
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể lưu câu trả lời đổi góc nhìn.") from exc
+    return present_perspective_topic(topic, current_user)
 
 
 UPLOAD_TYPES = {

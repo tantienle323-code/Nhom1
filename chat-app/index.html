@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261107-chat-interior">
+    <link rel="stylesheet" href="style.css?v=20261107-chat-upgrades">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
@@ -44,10 +44,15 @@
             <div class="tg-sidebar-header">
                 <button id="my-profile-modal-btn" class="tg-menu-btn" title="Cài đặt cá nhân">☰</button>
                 <div class="tg-search-wrapper">
-                    <input type="text" placeholder="Tìm kiếm..." />
+                <input type="text" placeholder="Lọc cuộc trò chuyện..." />
                 </div>
+                <button id="message-search-open-btn" class="tg-btn-icon tg-search-action" type="button" title="Tìm tin nhắn trong cuộc trò chuyện" aria-label="Tìm tin nhắn">⌕</button>
                 <button id="open-create-group-btn" class="tg-btn-icon" type="button" title="Tạo nhóm mới" aria-label="Tạo nhóm mới">＋</button>
             </div>
+            <section id="pinned-chat-section" class="tg-chat-section tg-pinned-section hidden">
+                <h3 class="tg-chat-section-title">Đã ghim</h3>
+                <ul id="pinned-chats-list" class="tg-chat-list" aria-label="Cuộc trò chuyện đã ghim"></ul>
+            </section>
             <section class="tg-chat-section">
                 <h3 class="tg-chat-section-title">Nhóm của bạn</h3>
                 <ul id="groups-list" class="tg-chat-list tg-groups-list" aria-label="Nhóm chat"></ul>
@@ -72,6 +77,7 @@
                 <div class="header-actions">
                     <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" disabled>📹 Gọi</button>
                     <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
+                    <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" disabled>🪞 Đổi góc nhìn</button>
                     <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
                     <a class="tg-admin-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game</a>
                     <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
@@ -113,6 +119,10 @@
             </div>
 
             <div class="tg-chat-footer">
+                <div id="reply-composer-preview" class="reply-composer-preview hidden">
+                    <div><strong id="reply-composer-sender"></strong><p id="reply-composer-text"></p></div>
+                    <button id="reply-composer-cancel" type="button" aria-label="Hủy trả lời">×</button>
+                </div>
                 <input type="file" id="file-input" accept="image/*,video/*" style="display: none;" />
                 <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh hoặc video" aria-label="Gửi ảnh hoặc video" onclick="document.getElementById('file-input').click()">📎</button>
                 <button id="open-camera-btn" class="tg-icon-btn" type="button" title="Chụp ảnh trực tiếp" aria-label="Chụp ảnh trực tiếp">📷</button>
@@ -206,6 +216,66 @@
                 <button id="world-memory-save-btn" class="btn-telegram" type="submit">Lưu vào thế giới</button>
             </form>
             <p id="world-feedback" class="world-feedback" role="status"></p>
+        </section>
+    </div>
+
+    <div id="message-search-modal" class="modal-overlay hidden">
+        <section class="message-search-card" role="dialog" aria-modal="true" aria-labelledby="message-search-title">
+            <button id="message-search-close-btn" class="world-close-btn" type="button" aria-label="Đóng tìm kiếm">×</button>
+            <p class="world-eyebrow">TÌM TRONG CUỘC TRÒ CHUYỆN HIỆN TẠI</p>
+            <h2 id="message-search-title">Tìm tin nhắn</h2>
+            <form id="message-search-form">
+                <label for="message-search-query">Từ khóa (ít nhất 2 ký tự)</label>
+                <input id="message-search-query" type="search" minlength="2" maxlength="100" required placeholder="Nhập nội dung cần tìm...">
+                <label for="message-search-sender">Người gửi (không bắt buộc)</label>
+                <input id="message-search-sender" type="text" maxlength="30" placeholder="Tên tài khoản">
+                <div class="message-search-dates">
+                    <div><label for="message-search-from">Từ ngày</label><input id="message-search-from" type="date"></div>
+                    <div><label for="message-search-to">Đến ngày</label><input id="message-search-to" type="date"></div>
+                </div>
+                <button class="btn-telegram" type="submit">Tìm kiếm</button>
+            </form>
+            <p id="message-search-status" class="message-search-status" role="status"></p>
+            <div id="message-search-results" class="message-search-results"></div>
+        </section>
+    </div>
+
+    <div id="perspective-modal" class="modal-overlay hidden">
+        <section class="perspective-modal-card" role="dialog" aria-modal="true" aria-labelledby="perspective-title">
+            <button id="perspective-close-btn" class="world-close-btn" type="button" aria-label="Đóng">×</button>
+            <header class="perspective-heading">
+                <span aria-hidden="true">🪞</span>
+                <div>
+                    <p class="world-eyebrow">CÙNG NHÌN MỘT TÌNH HUỐNG</p>
+                    <h2 id="perspective-title">Đổi góc nhìn</h2>
+                    <p>Mỗi người nhận một vai riêng. Câu trả lời chỉ được mở khi tất cả thành viên đã gửi.</p>
+                </div>
+            </header>
+            <div class="perspective-columns">
+                <section class="perspective-topics-section">
+                    <div class="perspective-section-heading">
+                        <h3>Chủ đề trong nhóm</h3>
+                        <button id="perspective-new-topic-btn" type="button">＋ Tạo chủ đề</button>
+                    </div>
+                    <div id="perspective-topic-list" class="perspective-topic-list" aria-live="polite"></div>
+                    <form id="perspective-create-form" class="perspective-create-form hidden">
+                        <label for="perspective-topic-title">Tên chủ đề</label>
+                        <input id="perspective-topic-title" type="text" maxlength="100" placeholder="Ví dụ: Có nên nghỉ việc làm thêm?" required>
+                        <label for="perspective-topic-situation">Chia sẻ tình huống</label>
+                        <textarea id="perspective-topic-situation" maxlength="2000" rows="4" placeholder="Mô tả hoàn cảnh để cả nhóm cùng hiểu..." required></textarea>
+                        <label for="perspective-topic-thought">Suy nghĩ ban đầu của bạn (chỉ bạn thấy đến lúc mở gương)</label>
+                        <textarea id="perspective-topic-thought" maxlength="1000" rows="3" placeholder="Điều bạn đang nghĩ hoặc phân vân..." required></textarea>
+                        <div class="perspective-form-actions">
+                            <button id="perspective-cancel-create-btn" class="btn-cancel" type="button">Hủy</button>
+                            <button class="btn-telegram" type="submit">Chia sẻ tình huống</button>
+                        </div>
+                    </form>
+                </section>
+                <section id="perspective-topic-detail" class="perspective-topic-detail" aria-live="polite">
+                    <p class="perspective-empty">Chọn một chủ đề hoặc tạo tình huống mới để bắt đầu.</p>
+                </section>
+            </div>
+            <p id="perspective-feedback" class="perspective-feedback" role="status"></p>
         </section>
     </div>
 
@@ -308,6 +378,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261107-camera-capture"></script>
+    <script src="app.js?v=20261107-chat-upgrades"></script>
 </body>
 </html>

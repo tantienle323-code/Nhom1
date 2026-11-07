@@ -60,6 +60,193 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 401)
 
 
+class ChatUpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_message_rate_limit_caps_room_user_pair(self):
+        key = ("group_rate_test", "alice")
+        main.message_rate_events.pop(key, None)
+        with patch.object(main.time, "monotonic", side_effect=[100.0] * 9):
+            for _ in range(main.MESSAGE_RATE_LIMIT):
+                self.assertTrue(await main.allow_chat_message(*key))
+            self.assertFalse(await main.allow_chat_message(*key))
+        main.message_rate_events.pop(key, None)
+
+    async def test_message_search_is_member_scoped_and_escapes_regex(self):
+        class Cursor:
+            def sort(self, *_):
+                return self
+
+            def limit(self, *_):
+                return self
+
+            async def to_list(self, length):
+                return [{
+                    "_id": main.ObjectId(),
+                    "room": "group_search",
+                    "sender": "bob",
+                    "content": "literal a.b",
+                    "reactions": {},
+                }]
+
+        class Messages:
+            def find(self, query):
+                self.query = query
+                return Cursor()
+
+        messages = Messages()
+        with (
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "message_collection", messages),
+        ):
+            result = await main.search_room_messages(
+                "group_search",
+                "alice",
+                q="a.b",
+                sender="bob",
+                date_from=None,
+                date_to=None,
+            )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(messages.query["sender"], "bob")
+        self.assertEqual(messages.query["content"]["$regex"], "a\\.b")
+
+    async def test_pin_preferences_are_validated_against_room_membership(self):
+        updates = []
+
+        class State:
+            async def update_one(self, query, update, upsert):
+                updates.append((query, update, upsert))
+
+        with (
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "chat_state_collection", State()),
+        ):
+            result = await main.set_pinned_room(
+                main.PinnedRoomSchema(room="group_demo", pinned=True),
+                "alice",
+            )
+        self.assertEqual(result, {"room": "group_demo", "pinned": True})
+        self.assertEqual(updates[0][1], {"$addToSet": {"pinned_rooms": "group_demo"}})
+
+    async def test_unread_state_uses_per_room_read_cursors(self):
+        private_room = main.private_room_id("alice", "bob")
+        group_room = "group_demo"
+        cursor_id = main.ObjectId()
+
+        class Cursor:
+            async def to_list(self, length):
+                return [{"_id": group_room}]
+
+        class Groups:
+            def find(self, query, projection):
+                return Cursor()
+
+        class Database:
+            def __getitem__(self, name):
+                if name != "groups":
+                    raise AssertionError(name)
+                return Groups()
+
+        class Users:
+            def find(self, query, projection):
+                class UserCursor:
+                    async def to_list(self, length):
+                        return [{"username": "bob"}]
+                return UserCursor()
+
+        class Messages:
+            async def distinct(self, field, query):
+                return [private_room, group_room]
+
+            async def count_documents(self, query):
+                if query["room"] == private_room:
+                    self.private_query = query
+                    return 2
+                self.group_query = query
+                return 1
+
+        class State:
+            async def find_one(self, query):
+                if query["_id"] == "alice":
+                    return {"pinned_rooms": [group_room]}
+                if query["_id"] == main.chat_room_state_id("alice", group_room):
+                    return {"read_cursor": str(cursor_id)}
+                return None
+
+        messages = Messages()
+        with (
+            patch.object(main, "database", Database()),
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "message_collection", messages),
+            patch.object(main, "chat_state_collection", State()),
+        ):
+            result = await main.get_chat_state("alice")
+
+        self.assertEqual(result["unread_counts"], {private_room: 2, group_room: 1})
+        self.assertEqual(result["total_unread"], 3)
+        self.assertEqual(result["pinned_rooms"], [group_room])
+        self.assertNotIn("_id", messages.private_query)
+        self.assertEqual(messages.group_query["_id"]["$gt"], cursor_id)
+
+    async def test_mark_chat_read_advances_cursor_and_broadcasts_receipt(self):
+        message_id = main.ObjectId()
+        updates = []
+        room = "group_receipts"
+
+        class Messages:
+            async def find_one(self, query, projection, sort):
+                return {"_id": message_id}
+
+            async def update_many(self, query, update):
+                updates.append((query, update))
+
+        class State:
+            async def update_one(self, query, update, upsert):
+                updates.append((query, update, upsert))
+
+        manager = type("Manager", (), {"broadcast_to_room": AsyncMock()})()
+        with (
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "message_collection", Messages()),
+            patch.object(main, "chat_state_collection", State()),
+            patch.object(main, "manager", manager),
+        ):
+            result = await main.mark_chat_read(room, "alice")
+
+        self.assertEqual(result["read_cursor"], str(message_id))
+        self.assertEqual(updates[1][0]["_id"]["$lte"], message_id)
+        self.assertIn("read_by.", next(iter(updates[1][1]["$set"])))
+        manager.broadcast_to_room.assert_awaited_once_with(
+            room, {"type": "read_receipt", "reader": "alice"}
+        )
+
+    async def test_empty_room_read_cursor_tracks_future_messages(self):
+        state_updates = []
+
+        class Messages:
+            async def find_one(self, query, projection, sort):
+                return None
+
+            async def update_many(self, query, update):
+                self.update = (query, update)
+
+        class State:
+            async def update_one(self, query, update, upsert):
+                state_updates.append(update["$set"]["read_cursor"])
+
+        with (
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "message_collection", Messages()),
+            patch.object(main, "chat_state_collection", State()),
+            patch.object(main, "manager", type(
+                "Manager", (), {"broadcast_to_room": AsyncMock()}
+            )()),
+        ):
+            result = await main.mark_chat_read("group_empty", "alice")
+
+        self.assertEqual(result["read_cursor"], state_updates[0])
+        self.assertTrue(main.ObjectId.is_valid(state_updates[0]))
+
+
 class PrivateWorldTests(unittest.IsolatedAsyncioTestCase):
     async def test_world_progress_counts_messages_memories_and_games(self):
         progress = main.build_world_progress(message_count=5, memory_count=1, game_count=1)
@@ -106,6 +293,199 @@ class PrivateWorldTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(games.documents), 1)
         self.assertEqual(games.documents["match-1"]["room"], "chat_alice_bob")
+
+
+class PerspectiveTopicTests(unittest.TestCase):
+    def test_perspective_schema_trims_and_rejects_blank_required_fields(self):
+        topic = main.PerspectiveTopicSchema(
+            title="  Work or study? ",
+            situation="  A shared situation. ",
+            initial_thought="  Unsure. ",
+        )
+        self.assertEqual(topic.title, "Work or study?")
+        self.assertEqual(topic.situation, "A shared situation.")
+        self.assertEqual(topic.initial_thought, "Unsure.")
+        with self.assertRaises(ValidationError):
+            main.PerspectiveTopicSchema(title="  ", situation="x", initial_thought="y")
+        with self.assertRaises(ValidationError):
+            main.PerspectiveResponseSchema(answer="  ")
+
+    def test_assignments_cover_members_and_perspective_map_groups_explicit_inputs(self):
+        members = ["alice", "bob", "carol"]
+        roles = main.assign_perspective_roles(members)
+        self.assertEqual(set(roles), set(members))
+        self.assertRegex(main.perspective_response_key("alice.smith"), r"^[0-9a-f]{64}$")
+
+        result = main.build_perspective_map(
+            {
+                "alice": {
+                    "answer": "Ưu tiên việc học và mục tiêu dài hạn.",
+                    "direction": "Tìm phương án dung hòa",
+                },
+                "bob": {
+                    "answer": "Việc học cần được ưu tiên trong kế hoạch.",
+                    "direction": "tìm phương án dung hòa",
+                },
+                "carol": {
+                    "answer": "Cần cân nhắc chi phí và thu nhập.",
+                    "direction": "Tiếp tục làm thêm",
+                },
+            },
+            roles,
+        )
+
+        self.assertIn("học", [item["word"] for item in result["common_words"]])
+        self.assertEqual(len(result["directions"]), 2)
+        shared = next(item for item in result["directions"] if len(item["roles"]) == 2)
+        self.assertEqual(len(shared["roles"]), 2)
+
+    def test_active_topics_hide_other_members_responses_until_reveal(self):
+        now = main.datetime.datetime.now(main.datetime.timezone.utc)
+        topic = {
+            "_id": "topic-1",
+            "title": "Work or study?",
+            "situation": "A shared situation.",
+            "creator": "alice",
+            "members": ["alice", "bob"],
+            "roles": {
+                "alice": {"name": "Student", "prompt": "Think as the student."},
+                "bob": {"name": "Family", "prompt": "Think as family."},
+            },
+            "responses": {
+                main.perspective_response_key("alice"): {
+                    "answer": "Focus on studies.",
+                    "assumption": "",
+                    "direction": "",
+                },
+            },
+            "initial_thought": "I am unsure.",
+            "status": "active",
+            "created_at": now,
+        }
+
+        for username in ("alice", "bob"):
+            result = main.present_perspective_topic(topic, username)
+            self.assertNotIn("perspectives", result)
+            if username == "alice":
+                self.assertEqual(result["initial_thought"], "I am unsure.")
+                self.assertEqual(result["own_response"]["answer"], "Focus on studies.")
+            else:
+                self.assertNotIn("initial_thought", result)
+                self.assertNotIn("own_response", result)
+
+        topic["responses"][main.perspective_response_key("bob")] = {
+            "answer": "Keep working.",
+            "assumption": "",
+            "direction": "",
+        }
+        topic["status"] = "revealed"
+        result = main.present_perspective_topic(topic, "bob")
+        self.assertEqual(result["initial_thought"], "I am unsure.")
+        self.assertEqual(len(result["perspectives"]), 2)
+
+
+class PerspectiveTopicApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_responses_stay_private_until_every_group_member_submits(self):
+        class Cursor:
+            def __init__(self, documents):
+                self.documents = documents
+
+            def sort(self, *_):
+                return self
+
+            def limit(self, *_):
+                return self
+
+            async def to_list(self, length):
+                return self.documents[:length]
+
+        class Topics:
+            def __init__(self):
+                self.documents = {}
+
+            async def insert_one(self, topic):
+                self.documents[topic["_id"]] = topic
+
+            async def find_one(self, query):
+                topic = self.documents.get(query["_id"])
+                if topic and topic["room"] == query["room"]:
+                    return topic
+                return None
+
+            def find(self, query):
+                return Cursor([
+                    topic for topic in self.documents.values()
+                    if topic["room"] == query["room"]
+                ])
+
+            async def update_one(self, query, update):
+                topic = await self.find_one(query)
+                if not topic or topic["status"] != query.get("status", topic["status"]):
+                    return type("UpdateResult", (), {"matched_count": 0})()
+                for path, value in update["$set"].items():
+                    if path.startswith("responses."):
+                        topic["responses"][path.removeprefix("responses.")] = value
+                    else:
+                        topic[path] = value
+                return type("UpdateResult", (), {"matched_count": 1})()
+
+        class Groups:
+            async def find_one(self, query):
+                if query["_id"] == "group_demo" and query["members"] in {"alice.smith", "bob"}:
+                    return {"_id": "group_demo", "members": ["alice.smith", "bob"]}
+                return None
+
+        class Database:
+            def __getitem__(self, name):
+                if name != "groups":
+                    raise AssertionError(name)
+                return Groups()
+
+        topics = Topics()
+        roles = {
+            "alice.smith": {"name": "Student", "prompt": "Think as the student."},
+            "bob": {"name": "Family", "prompt": "Think as family."},
+        }
+        with (
+            patch.object(main, "database", Database()),
+            patch.object(main, "perspective_topic_collection", topics),
+            patch.object(main, "assign_perspective_roles", return_value=roles),
+        ):
+            created = await main.create_perspective_topic(
+                "group_demo",
+                main.PerspectiveTopicSchema(
+                    title="Work or study?",
+                    situation="A shared situation.",
+                    initial_thought="I am unsure.",
+                ),
+                "alice.smith",
+            )
+            private_view = await main.get_perspective_topics("group_demo", "bob")
+            self.assertEqual(private_view[0]["submitted_count"], 0)
+            self.assertNotIn("initial_thought", private_view[0])
+
+            first = await main.submit_perspective_response(
+                "group_demo",
+                created["id"],
+                main.PerspectiveResponseSchema(answer="Focus on studies."),
+                "alice.smith",
+            )
+            self.assertEqual(first["status"], "active")
+            self.assertNotIn("perspectives", first)
+
+            private_view = await main.get_perspective_topics("group_demo", "bob")
+            self.assertEqual(private_view[0]["submitted_count"], 1)
+            self.assertNotIn("perspectives", private_view[0])
+
+            revealed = await main.submit_perspective_response(
+                "group_demo",
+                created["id"],
+                main.PerspectiveResponseSchema(answer="Keep working."),
+                "bob",
+            )
+            self.assertEqual(revealed["status"], "revealed")
+            self.assertEqual(len(revealed["perspectives"]), 2)
+            self.assertEqual(revealed["initial_thought"], "I am unsure.")
 
 
 class GroupChatTests(unittest.IsolatedAsyncioTestCase):
@@ -247,6 +627,94 @@ class GroupChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages.inserted[0]["room"], room)
         self.assertEqual(messages.inserted[0]["content"], "Hello group")
         self.assertTrue(any(event.get("content") == "Hello group" for event in socket.events))
+
+    async def test_websocket_reactions_are_persisted_toggled_and_broadcast(self):
+        room = "group_123"
+        message_id = str(main.ObjectId())
+        token = main.create_access_token("alice")
+
+        class FakeSocket:
+            headers = {"sec-websocket-protocol": f"bearer.{token}, chat"}
+
+            def __init__(self):
+                self.events = []
+                self.incoming = [
+                    {"type": "reaction", "message_id": message_id, "emoji": "👍"},
+                    {"type": "reaction", "message_id": message_id, "emoji": "👍"},
+                ]
+
+            async def accept(self, subprotocol):
+                self.accepted = subprotocol == "chat"
+
+            async def receive_json(self):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                raise main.WebSocketDisconnect()
+
+            async def send_json(self, event):
+                self.events.append(event)
+
+            async def close(self, code, reason):
+                self.close_code = code
+
+        class Groups:
+            async def find_one(self, query, projection):
+                return {"_id": room} if query["members"] == "alice" else None
+
+        class Database:
+            def __getitem__(self, collection):
+                if collection != "groups":
+                    raise AssertionError(collection)
+                return Groups()
+
+        class Users:
+            async def find_one(self, query, projection):
+                return {"username": "alice"}
+
+        class Messages:
+            def __init__(self):
+                self.document = {
+                    "_id": main.ObjectId(message_id),
+                    "room": room,
+                    "sender": "bob",
+                    "content": "Hello",
+                    "is_deleted": False,
+                    "reactions": {},
+                }
+
+            async def find_one(self, query, projection=None):
+                if query["_id"] == self.document["_id"] and query["room"] == room:
+                    return self.document
+                return None
+
+            async def update_one(self, query, update):
+                if query["_id"] != self.document["_id"]:
+                    return type("UpdateResult", (), {"matched_count": 0})()
+                for path, value in update.get("$set", {}).items():
+                    key = path.removeprefix("reactions.")
+                    self.document["reactions"][key] = value
+                for path in update.get("$unset", {}):
+                    self.document["reactions"].pop(path.removeprefix("reactions."), None)
+                return type("UpdateResult", (), {"matched_count": 1})()
+
+        socket = FakeSocket()
+        messages = Messages()
+        with (
+            patch.object(main, "database", Database()),
+            patch.object(main, "user_collection", Users()),
+            patch.object(main, "message_collection", messages),
+            patch.object(main, "manager", main.ConnectionManager()),
+        ):
+            await main.websocket_endpoint(socket, room, "alice")
+
+        updates = [event for event in socket.events if event.get("type") == "reaction_update"]
+        self.assertEqual(len(updates), 2)
+        self.assertEqual(
+            updates[0]["reactions"],
+            [{"emoji": "👍", "count": 1, "users": ["alice"]}],
+        )
+        self.assertEqual(updates[1]["reactions"], [])
+        self.assertEqual(messages.document["reactions"], {})
 
 
 class UploadTests(unittest.IsolatedAsyncioTestCase):

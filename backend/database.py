@@ -27,6 +27,8 @@ message_collection = database.get_collection("messages")
 room_collection = database.get_collection("rooms")
 world_memory_collection = database.get_collection("world_memories")
 world_game_collection = database.get_collection("world_games")
+perspective_topic_collection = database.get_collection("perspective_topics")
+chat_state_collection = database.get_collection("chat_states")
 
 
 # ==========================================

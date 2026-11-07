@@ -12,7 +12,17 @@ let accessToken = localStorage.getItem(TOKEN_KEY) || "";
 let isRegisterMode = false;
 let users = [];
 let groups = [];
+let pinnedRooms = [];
+let unreadCounts = {};
+let chatStateTimer = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+let reconnectingRoom = "";
+let pendingReply = null;
 let selectedMemoryMessageId = null;
+let perspectiveTopics = [];
+let selectedPerspectiveTopicId = "";
+let perspectiveRefreshTimer = null;
 const onlineUsers = new Set();
 let activeCall = null;
 let pendingCallInvite = null;
@@ -72,6 +82,21 @@ const createGroupButton = document.getElementById("open-create-group-btn");
 const submitGroupButton = document.getElementById("submit-group-btn");
 const cancelGroupButton = document.getElementById("cancel-group-btn");
 const userSearch = document.querySelector(".tg-search-wrapper input");
+const pinnedChatSection = document.getElementById("pinned-chat-section");
+const pinnedChatsList = document.getElementById("pinned-chats-list");
+const messageSearchOpenButton = document.getElementById("message-search-open-btn");
+const messageSearchModal = document.getElementById("message-search-modal");
+const messageSearchForm = document.getElementById("message-search-form");
+const messageSearchQuery = document.getElementById("message-search-query");
+const messageSearchSender = document.getElementById("message-search-sender");
+const messageSearchFrom = document.getElementById("message-search-from");
+const messageSearchTo = document.getElementById("message-search-to");
+const messageSearchStatus = document.getElementById("message-search-status");
+const messageSearchResults = document.getElementById("message-search-results");
+const replyComposerPreview = document.getElementById("reply-composer-preview");
+const replyComposerSender = document.getElementById("reply-composer-sender");
+const replyComposerText = document.getElementById("reply-composer-text");
+const replyComposerCancel = document.getElementById("reply-composer-cancel");
 const adminLink = document.getElementById("admin-link");
 const chatLayout = document.getElementById("chat-screen");
 const profileModal = document.getElementById("profile-modal");
@@ -80,6 +105,15 @@ const profileAvatarInput = document.getElementById("profile-avatar-input");
 const profileBioInput = document.getElementById("profile-bio-input");
 const worldOpenButton = document.getElementById("world-open-btn");
 const worldModal = document.getElementById("world-modal");
+const perspectiveOpenButton = document.getElementById("perspective-open-btn");
+const perspectiveModal = document.getElementById("perspective-modal");
+const perspectiveTopicList = document.getElementById("perspective-topic-list");
+const perspectiveTopicDetail = document.getElementById("perspective-topic-detail");
+const perspectiveCreateForm = document.getElementById("perspective-create-form");
+const perspectiveFeedback = document.getElementById("perspective-feedback");
+const perspectiveTopicTitle = document.getElementById("perspective-topic-title");
+const perspectiveTopicSituation = document.getElementById("perspective-topic-situation");
+const perspectiveTopicThought = document.getElementById("perspective-topic-thought");
 const worldMemoryForm = document.getElementById("world-memory-form");
 const worldMemoryTitle = document.getElementById("world-memory-title");
 const worldMemoryNote = document.getElementById("world-memory-note");
@@ -199,6 +233,9 @@ function setAuthenticated(username, token, isAdmin) {
     chatScreen.classList.remove("hidden");
     loadUsersList();
     loadGroupsList();
+    loadChatState();
+    if (chatStateTimer) clearInterval(chatStateTimer);
+    chatStateTimer = setInterval(loadChatState, 15000);
 }
 
 function showLogin() {
@@ -217,6 +254,18 @@ function signOut(reload = true) {
     if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
     if (musicOpenSource) musicOpenSource.classList.add("hidden");
     if (musicModal) musicModal.classList.add("hidden");
+    if (perspectiveModal) perspectiveModal.classList.add("hidden");
+    if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
+    perspectiveRefreshTimer = null;
+    if (chatStateTimer) clearInterval(chatStateTimer);
+    chatStateTimer = null;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    reconnectingRoom = "";
+    perspectiveTopics = [];
+    selectedPerspectiveTopicId = "";
+    pinnedRooms = [];
+    unreadCounts = {};
     musicPlaylist = [];
     currentMusicIndex = -1;
     currentMusicTrack = null;
@@ -229,6 +278,8 @@ function signOut(reload = true) {
     currentTargetUser = "";
     currentRoom = "";
     groups = [];
+    if (worldOpenButton) worldOpenButton.disabled = true;
+    if (perspectiveOpenButton) perspectiveOpenButton.disabled = true;
     if (groupsList) groupsList.replaceChildren();
     localStorage.removeItem(TOKEN_KEY);
     if (socket) {
@@ -342,21 +393,27 @@ function renderUsersList() {
         bio.textContent = user.bio || "Nhấn để trò chuyện";
         info.append(name, bio);
         item.append(avatar, info);
+        appendUnreadBadge(item, getPrivateRoomId(currentUsername, user.username));
+        item.append(createPinButton(getPrivateRoomId(currentUsername, user.username)));
         usersList.append(item);
     }
+    renderPinnedChats();
 }
 
 function renderGroupsList() {
     if (!groupsList) return;
     groupsList.replaceChildren();
-    if (!groups.length) {
+    const filter = userSearch ? userSearch.value.trim().toLocaleLowerCase() : "";
+    const visibleGroups = groups.filter((group) => group.name.toLocaleLowerCase().includes(filter));
+    if (!visibleGroups.length) {
         const empty = document.createElement("li");
         empty.className = "tg-empty-notice";
         empty.textContent = "Chưa tham gia nhóm nào";
         groupsList.append(empty);
+        renderPinnedChats();
         return;
     }
-    for (const group of groups) {
+    for (const group of visibleGroups) {
         const item = document.createElement("li");
         item.className = `tg-chat-item${currentRoom === group.id ? " active" : ""}`;
         item.addEventListener("click", () => switchGroupChat(group));
@@ -372,7 +429,95 @@ function renderGroupsList() {
         detail.textContent = `${group.members.length} thành viên`;
         info.append(name, detail);
         item.append(avatar, info);
+        appendUnreadBadge(item, group.id);
+        item.append(createPinButton(group.id));
         groupsList.append(item);
+    }
+    renderPinnedChats();
+}
+
+function getConversationDetails(room) {
+    const group = groups.find((item) => item.id === room);
+    if (group) return { room, label: group.name, group };
+    const user = users.find((item) => getPrivateRoomId(currentUsername, item.username) === room);
+    return user ? { room, label: user.username, user } : null;
+}
+
+function appendUnreadBadge(item, room) {
+    const count = unreadCounts[room] || 0;
+    if (!count) return;
+    const badge = document.createElement("span");
+    badge.className = "chat-unread-badge";
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.setAttribute("aria-label", `${count} tin chưa đọc`);
+    item.append(badge);
+}
+
+function createPinButton(room) {
+    const pinned = pinnedRooms.includes(room);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `chat-pin-button${pinned ? " pinned" : ""}`;
+    button.textContent = pinned ? "★" : "☆";
+    button.title = pinned ? "Bỏ ghim cuộc trò chuyện" : "Ghim cuộc trò chuyện";
+    button.setAttribute("aria-label", button.title);
+    button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try {
+            await apiFetch("/chat-state/pinned", {
+                method: "PUT",
+                body: JSON.stringify({ room, pinned: !pinned }),
+            });
+            await loadChatState();
+        } catch (error) {
+            alert(error.message || "Không thể cập nhật ghim.");
+        }
+    });
+    return button;
+}
+
+function renderPinnedChats() {
+    if (!pinnedChatSection || !pinnedChatsList) return;
+    const conversations = pinnedRooms.map(getConversationDetails).filter(Boolean);
+    pinnedChatsList.replaceChildren();
+    pinnedChatSection.classList.toggle("hidden", !conversations.length);
+    for (const conversation of conversations) {
+        const item = document.createElement("li");
+        item.className = `tg-chat-item${currentRoom === conversation.room ? " active" : ""}`;
+        item.addEventListener("click", () => {
+            if (conversation.group) switchGroupChat(conversation.group);
+            else switchPrivateChat(conversation.user.username, conversation.user.avatar);
+        });
+        const avatar = document.createElement("span");
+        avatar.className = conversation.group ? "tg-group-avatar" : "tg-avatar tg-pinned-avatar";
+        avatar.textContent = conversation.group ? "👥" : "✉";
+        const info = document.createElement("div");
+        info.className = "info";
+        const name = document.createElement("h4");
+        name.textContent = conversation.label;
+        const detail = document.createElement("p");
+        detail.textContent = conversation.group ? `${conversation.group.members.length} thành viên` : "Trò chuyện riêng";
+        info.append(name, detail);
+        item.append(avatar, info);
+        appendUnreadBadge(item, conversation.room);
+        item.append(createPinButton(conversation.room));
+        pinnedChatsList.append(item);
+    }
+}
+
+async function loadChatState() {
+    if (!currentUsername || !accessToken) return;
+    try {
+        const state = await apiFetch("/chat-state");
+        pinnedRooms = state.pinned_rooms || [];
+        unreadCounts = state.unread_counts || {};
+        renderGroupsList();
+        renderUsersList();
+        document.title = state.total_unread
+            ? `(${state.total_unread}) Chat Realtime`
+            : "Ứng dụng chat";
+    } catch (error) {
+        console.error("Không thể tải trạng thái cuộc trò chuyện:", error);
     }
 }
 
@@ -428,6 +573,11 @@ async function loadGroupsList() {
 }
 
 async function switchGroupChat(group) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    reconnectingRoom = "";
+    reconnectAttempts = 0;
+    clearPendingReply();
     finishVideoCall();
     resetMusicSyncSession(true);
     pendingMusicInvite = null;
@@ -436,6 +586,12 @@ async function switchGroupChat(group) {
     currentRoom = group.id;
     updateVideoCallButton();
     if (worldOpenButton) worldOpenButton.disabled = true;
+    if (perspectiveOpenButton) perspectiveOpenButton.disabled = false;
+    if (perspectiveModal) perspectiveModal.classList.add("hidden");
+    if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
+    perspectiveRefreshTimer = null;
+    perspectiveTopics = [];
+    selectedPerspectiveTopicId = "";
     if (worldModal) worldModal.classList.add("hidden");
     clearMemorySource();
     if (socket) {
@@ -468,6 +624,7 @@ async function switchGroupChat(group) {
             for (const message of history) renderMessage(message);
         }
         scrollToBottom();
+        await markChatRead(room);
         connectWebSocket(room, currentUsername);
     } catch (error) {
         alert(error.message || "Không thể mở nhóm chat.");
@@ -972,12 +1129,21 @@ if (callCameraButton) {
 if (callScreenButton) callScreenButton.addEventListener("click", toggleCallScreenShare);
 
 async function switchPrivateChat(targetUser, avatar) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    reconnectingRoom = "";
+    reconnectAttempts = 0;
+    clearPendingReply();
     finishVideoCall();
     resetMusicSyncSession(true);
     pendingMusicInvite = null;
     if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
     currentTargetUser = targetUser;
     if (worldOpenButton) worldOpenButton.disabled = false;
+    if (perspectiveOpenButton) perspectiveOpenButton.disabled = true;
+    if (perspectiveModal) perspectiveModal.classList.add("hidden");
+    if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
+    perspectiveRefreshTimer = null;
     if (worldModal) worldModal.classList.add("hidden");
     clearMemorySource();
     if (socket) {
@@ -1000,6 +1166,7 @@ async function switchPrivateChat(targetUser, avatar) {
 
     try {
         await loadHistory(currentRoom);
+        await markChatRead(currentRoom);
         connectWebSocket(currentRoom, currentUsername);
     } catch (error) {
         alert(error.message || "Không thể mở cuộc trò chuyện.");
@@ -1023,14 +1190,38 @@ async function loadHistory(room) {
     scrollToBottom();
 }
 
+async function markChatRead(room) {
+    if (!room || room !== currentRoom || document.visibilityState !== "visible") return;
+    try {
+        await apiFetch(`/chat-state/read/${encodeURIComponent(room)}`, { method: "POST" });
+        unreadCounts[room] = 0;
+        renderGroupsList();
+        renderUsersList();
+        document.title = Object.values(unreadCounts).reduce((total, count) => total + count, 0)
+            ? `(${Object.values(unreadCounts).reduce((total, count) => total + count, 0)}) Chat Realtime`
+            : "Ứng dụng chat";
+    } catch (error) {
+        console.error("Không thể cập nhật tin đã đọc:", error);
+    }
+}
+
 function connectWebSocket(room, username) {
     const endpoint = `${WS_BASE}/${encodeURIComponent(room)}/${encodeURIComponent(username)}`;
     const activeSocket = new WebSocket(endpoint, [`bearer.${accessToken}`, "chat"]);
     socket = activeSocket;
+    reconnectingRoom = room;
     activeSocket.onopen = () => {
+        reconnectAttempts = 0;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
         if (socket === activeSocket && headerStatus) {
-            headerStatus.textContent = currentRoom.startsWith("group_") ? "đã kết nối" : "ngoại tuyến";
+            headerStatus.textContent = "đã kết nối";
             headerStatus.classList.remove("is-online");
+        }
+        if (room === currentRoom) {
+            loadHistory(room).then(() => markChatRead(room)).catch((error) => {
+                console.error("Không thể đồng bộ tin nhắn sau khi kết nối lại:", error);
+            });
         }
         updateMusicShareControls();
         updateVideoCallButton();
@@ -1048,14 +1239,41 @@ function connectWebSocket(room, username) {
             setPresence(data.username, data.online);
         } else if (data.type === "edit_message") {
             const message = document.getElementById(`msg-${data._id}`);
-            const content = message?.querySelector(".content");
-            if (content) content.textContent = `${data.new_content} (đã sửa)`;
+            const body = message?.querySelector(".content > span");
+            if (body) body.textContent = `${data.new_content} (đã sửa)`;
+        } else if (data.type === "reaction_update") {
+            const message = document.getElementById(`msg-${data._id}`);
+            const reactions = message?.querySelector(".message-reactions");
+            if (reactions) renderMessageReactions(reactions, data.reactions);
+        } else if (data.type === "delivery_receipt") {
+            const message = document.getElementById(`msg-${data.message_id}`);
+            const status = message?.querySelector(".message-delivery-status");
+            if (status) {
+                status.dataset.delivered = JSON.stringify(data.delivered_to || []);
+                status.textContent = currentRoom.startsWith("group_")
+                    ? `Đã nhận (${(data.delivered_to || []).length})`
+                    : "Đã nhận";
+            }
+        } else if (data.type === "read_receipt") {
+            if (data.reader !== currentUsername) {
+                messagesContainer?.querySelectorAll(".msg.sent .message-delivery-status").forEach((status) => {
+                    const readers = new Set(JSON.parse(status.dataset.readers || "[]"));
+                    readers.add(data.reader);
+                    status.dataset.readers = JSON.stringify([...readers]);
+                    status.textContent = currentRoom.startsWith("group_")
+                        ? `Đã xem (${readers.size})`
+                        : "Đã xem";
+                    status.classList.add("is-read");
+                });
+            }
         } else if (data.type === "delete_message") {
             const message = document.getElementById(`msg-${data._id}`);
             if (message) {
                 message.querySelector(".content").textContent = "Tin nhắn đã được thu hồi";
                 message.querySelector(".content").classList.add("deleted");
                 message.querySelector(".msg-actions")?.remove();
+                message.querySelector(".message-reactions")?.remove();
+                message.querySelector(".msg-reaction-picker")?.remove();
             }
         } else if (data.type === "call_signal") {
             handleCallSignal(data);
@@ -1071,7 +1289,27 @@ function connectWebSocket(room, username) {
             alert(data.message);
         } else {
             renderMessage(data);
+            if (data.type === "chat" && data.sender !== currentUsername && activeSocket.readyState === WebSocket.OPEN) {
+                activeSocket.send(JSON.stringify({
+                    type: "message_delivered",
+                    message_id: data._id,
+                }));
+            }
             scrollToBottom();
+            if (data.sender !== currentUsername && document.visibilityState === "visible") {
+                markChatRead(room);
+            } else if (
+                data.sender !== currentUsername &&
+                document.visibilityState === "hidden" &&
+                "Notification" in window &&
+                Notification.permission === "granted" &&
+                typeof data.content === "string" &&
+                data.content.toLocaleLowerCase().includes(`@${currentUsername}`.toLocaleLowerCase())
+            ) {
+                new Notification(`Được nhắc đến trong ${headerName?.textContent || "cuộc trò chuyện"}`, {
+                    body: data.content.slice(0, 160),
+                });
+            }
             if (worldModal && !worldModal.classList.contains("hidden")) refreshWorld();
         }
     };
@@ -1086,6 +1324,17 @@ function connectWebSocket(room, username) {
         if (event.code === 4401) {
             alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
             signOut(false);
+        } else if (event.code === 4403) {
+            reconnectingRoom = "";
+            if (headerStatus) headerStatus.textContent = "không có quyền truy cập";
+        } else if (currentRoom === room && reconnectingRoom === room && !reconnectTimer) {
+            const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttempts, 5)));
+            reconnectAttempts += 1;
+            if (headerStatus) headerStatus.textContent = "mất kết nối · đang thử lại";
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                if (!socket && currentRoom === room && accessToken) connectWebSocket(room, username);
+            }, delay);
         }
     };
     activeSocket.onerror = () => {
@@ -1113,6 +1362,39 @@ function renderMessage(message) {
     content.className = "content";
 
     const textVal = message.content || "";
+    if (message.reply_to) {
+        const quote = document.createElement("button");
+        quote.type = "button";
+        quote.className = "message-reply-quote";
+        const quoteSender = document.createElement("strong");
+        quoteSender.textContent = message.reply_to.sender || "Tin nhắn";
+        const quoteText = document.createElement("span");
+        quoteText.textContent = message.reply_to.content || "Tệp đính kèm";
+        quote.append(quoteSender, quoteText);
+        quote.addEventListener("click", async () => {
+            const room = currentRoom;
+            let original = document.getElementById(`msg-${message.reply_to.id}`);
+            if (!original) {
+                try {
+                    const originalMessage = await apiFetch(
+                        `/messages/${encodeURIComponent(room)}/by-id/${encodeURIComponent(message.reply_to.id)}`,
+                    );
+                    if (room !== currentRoom) return;
+                    renderMessage(originalMessage);
+                    original = document.getElementById(`msg-${message.reply_to.id}`);
+                } catch (error) {
+                    console.error("Không thể mở tin nhắn được trả lời:", error);
+                    return;
+                }
+            }
+            if (original) {
+                original.scrollIntoView({ behavior: "smooth", block: "center" });
+                original.classList.add("message-reply-target");
+                setTimeout(() => original.classList.remove("message-reply-target"), 1400);
+            }
+        });
+        content.append(quote);
+    }
     if (message.is_deleted) {
         content.textContent = "Tin nhắn đã được thu hồi";
         content.classList.add("deleted");
@@ -1137,25 +1419,66 @@ function renderMessage(message) {
                 content.append(video);
                 loadProtectedMedia(video, textVal);
         } else {
-            content.textContent = textVal;
+            const body = document.createElement("span");
+            body.textContent = textVal;
+            content.append(body);
         }
     } else {
-        content.textContent = `${textVal}${message.is_edited ? " (đã sửa)" : ""}`;
+        const body = document.createElement("span");
+        body.textContent = `${textVal}${message.is_edited ? " (đã sửa)" : ""}`;
+        content.append(body);
     }
 
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = message.timestamp || "";
+    if (isSent) {
+        const receipt = document.createElement("span");
+        receipt.className = "message-delivery-status";
+        const readers = message.read_by ? Object.values(message.read_by) : [];
+        const deliveredTo = Array.isArray(message.delivered_to) ? message.delivered_to : [];
+        receipt.dataset.readers = JSON.stringify(readers);
+        receipt.dataset.delivered = JSON.stringify(deliveredTo);
+        if (readers.length) {
+            receipt.textContent = currentRoom.startsWith("group_")
+                ? `Đã xem (${readers.length})`
+                : "Đã xem";
+            receipt.classList.add("is-read");
+        } else {
+            receipt.textContent = deliveredTo.length
+                ? currentRoom.startsWith("group_") ? `Đã nhận (${deliveredTo.length})` : "Đã nhận"
+                : "Đã gửi";
+        }
+        meta.append(" · ", receipt);
+    }
     item.append(content, meta);
 
     if (message._id && !message.is_deleted) {
+        const reactions = document.createElement("div");
+        reactions.className = "message-reactions";
+        renderMessageReactions(reactions, message.reactions || []);
+        item.append(reactions);
+
         const actions = document.createElement("div");
         actions.className = "msg-actions";
+        const reply = document.createElement("button");
+        reply.type = "button";
+        reply.className = "msg-reply-action";
+        reply.textContent = "Trả lời";
+        reply.addEventListener("click", () => setPendingReply(message));
+        actions.append(reply);
+        const reactionToggle = document.createElement("button");
+        reactionToggle.type = "button";
+        reactionToggle.className = "msg-reaction-toggle";
+        reactionToggle.textContent = "☺ Phản ứng";
+        reactionToggle.setAttribute("aria-expanded", "false");
+        actions.append(reactionToggle);
+
         if (isSent && !textVal.startsWith("/uploads/")) {
             const edit = document.createElement("button");
             edit.type = "button";
             edit.textContent = "Sửa";
-            edit.addEventListener("click", () => editMessage(message._id, content.textContent));
+            edit.addEventListener("click", () => editMessage(message._id, message.content || ""));
             actions.append(edit);
         }
         if (isSent) {
@@ -1173,9 +1496,54 @@ function renderMessage(message) {
             remember.addEventListener("click", () => openWorld(message));
             actions.append(remember);
         }
-        item.append(actions);
+        const reactionPicker = document.createElement("div");
+        reactionPicker.className = "msg-reaction-picker hidden";
+        reactionToggle.addEventListener("click", () => {
+            const opening = reactionPicker.classList.contains("hidden");
+            reactionPicker.classList.toggle("hidden", !opening);
+            reactionToggle.setAttribute("aria-expanded", String(opening));
+        });
+        for (const emoji of MESSAGE_REACTION_EMOJIS) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = emoji;
+            button.setAttribute("aria-label", `Thả ${emoji}`);
+            button.addEventListener("click", () => sendMessageReaction(message._id, emoji));
+            reactionPicker.append(button);
+        }
+        item.append(actions, reactionPicker);
     }
     messagesContainer.append(item);
+}
+
+const MESSAGE_REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+function renderMessageReactions(container, reactions) {
+    container.replaceChildren();
+    for (const reaction of reactions || []) {
+        if (!reaction || !MESSAGE_REACTION_EMOJIS.includes(reaction.emoji) || !reaction.count) continue;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "message-reaction";
+        const selected = Array.isArray(reaction.users) && reaction.users.includes(currentUsername);
+        if (selected) button.classList.add("selected");
+        button.setAttribute("aria-pressed", String(selected));
+        button.setAttribute("aria-label", `${reaction.emoji}, ${reaction.count} phản ứng`);
+        button.textContent = `${reaction.emoji} ${reaction.count}`;
+        button.addEventListener("click", () => {
+            const messageId = container.closest(".msg")?.id?.replace(/^msg-/, "");
+            if (messageId) sendMessageReaction(messageId, reaction.emoji);
+        });
+        container.append(button);
+    }
+}
+
+function sendMessageReaction(messageId, emoji) {
+    if (socket?.readyState !== WebSocket.OPEN) {
+        alert("Đang kết nối lại. Vui lòng thử thả cảm xúc sau.");
+        return;
+    }
+    socket.send(JSON.stringify({ type: "reaction", message_id: messageId, emoji }));
 }
 
 function showEmptyConversation(title, description, icon) {
@@ -1198,6 +1566,265 @@ function clearMemorySource() {
     selectedMemoryMessageId = null;
     if (worldSourceText) worldSourceText.textContent = "";
     if (worldSourcePreview) worldSourcePreview.classList.add("hidden");
+}
+
+function addPerspectiveText(container, tagName, className, text) {
+    const element = document.createElement(tagName);
+    if (className) element.className = className;
+    element.textContent = text;
+    container.append(element);
+    return element;
+}
+
+function renderPerspectiveTopics() {
+    if (!perspectiveTopicList) return;
+    perspectiveTopicList.replaceChildren();
+    if (!perspectiveTopics.length) {
+        addPerspectiveText(perspectiveTopicList, "p", "perspective-empty", "Nhóm chưa có chủ đề nào.");
+        perspectiveTopicDetail?.replaceChildren();
+        if (perspectiveTopicDetail) {
+            addPerspectiveText(perspectiveTopicDetail, "p", "perspective-empty", "Tạo tình huống đầu tiên để cả nhóm cùng nhìn từ nhiều phía.");
+        }
+        return;
+    }
+
+    if (!perspectiveTopics.some((topic) => topic.id === selectedPerspectiveTopicId)) {
+        selectedPerspectiveTopicId = perspectiveTopics[0].id;
+    }
+    for (const topic of perspectiveTopics) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `perspective-topic-item${topic.id === selectedPerspectiveTopicId ? " active" : ""}`;
+        button.addEventListener("click", () => {
+            selectedPerspectiveTopicId = topic.id;
+            renderPerspectiveTopics();
+        });
+        addPerspectiveText(button, "strong", "", topic.title);
+        addPerspectiveText(
+            button,
+            "span",
+            "",
+            topic.status === "revealed"
+                ? "Đã mở gương"
+                : `${topic.submitted_count}/${topic.member_count} người đã gửi`,
+        );
+        perspectiveTopicList.append(button);
+    }
+    renderPerspectiveTopicDetail(
+        perspectiveTopics.find((topic) => topic.id === selectedPerspectiveTopicId),
+    );
+}
+
+function renderPerspectiveTopicDetail(topic) {
+    if (!perspectiveTopicDetail || !topic) return;
+    perspectiveTopicDetail.replaceChildren();
+    addPerspectiveText(perspectiveTopicDetail, "h3", "perspective-detail-title", topic.title);
+    addPerspectiveText(perspectiveTopicDetail, "p", "perspective-situation", topic.situation);
+    addPerspectiveText(
+        perspectiveTopicDetail,
+        "p",
+        "perspective-progress",
+        topic.status === "revealed"
+            ? "Mọi người đã gửi xong — các góc nhìn được mở cùng lúc."
+            : `${topic.submitted_count}/${topic.member_count} thành viên đã gửi. Nội dung của người khác vẫn được giữ kín.`,
+    );
+
+    if (topic.status !== "revealed") {
+        const role = topic.own_role;
+        if (role) {
+            const roleCard = document.createElement("section");
+            roleCard.className = "perspective-role-card";
+            addPerspectiveText(roleCard, "strong", "", `Vai của bạn: ${role.name}`);
+            addPerspectiveText(roleCard, "p", "", role.prompt);
+            perspectiveTopicDetail.append(roleCard);
+        }
+        const form = document.createElement("form");
+        form.className = "perspective-response-form";
+        const directionLabel = addPerspectiveText(form, "label", "", "Hướng nhìn nổi bật (không bắt buộc)");
+        const directionInput = document.createElement("input");
+        directionInput.name = "direction";
+        directionInput.maxLength = 100;
+        directionInput.placeholder = "Ví dụ: ưu tiên việc học, tìm phương án dung hòa...";
+        directionInput.value = topic.own_response?.direction || "";
+        directionLabel.htmlFor = "perspective-response-direction";
+        directionInput.id = "perspective-response-direction";
+        const answerLabel = addPerspectiveText(form, "label", "", "Suy nghĩ trong vai được giao");
+        const answerInput = document.createElement("textarea");
+        answerInput.name = "answer";
+        answerInput.maxLength = 2000;
+        answerInput.rows = 4;
+        answerInput.required = true;
+        answerInput.placeholder = "Bạn sẽ cảm thấy, ưu tiên hoặc khuyên điều gì trong vai này?";
+        answerInput.value = topic.own_response?.answer || "";
+        answerLabel.htmlFor = "perspective-response-answer";
+        answerInput.id = "perspective-response-answer";
+        const assumptionLabel = addPerspectiveText(form, "label", "", "Giả định hoặc rủi ro có thể bị bỏ sót (không bắt buộc)");
+        const assumptionInput = document.createElement("textarea");
+        assumptionInput.name = "assumption";
+        assumptionInput.maxLength = 500;
+        assumptionInput.rows = 2;
+        assumptionInput.placeholder = "Một điều người gửi có thể chưa cân nhắc...";
+        assumptionInput.value = topic.own_response?.assumption || "";
+        assumptionLabel.htmlFor = "perspective-response-assumption";
+        assumptionInput.id = "perspective-response-assumption";
+        const submit = document.createElement("button");
+        submit.type = "submit";
+        submit.className = "btn-telegram";
+        submit.textContent = topic.own_submitted ? "Cập nhật câu trả lời kín" : "Gửi câu trả lời kín";
+        form.append(directionInput, answerInput, assumptionInput, submit);
+        if (topic.own_submitted) {
+            addPerspectiveText(form, "p", "perspective-private-note", "Chỉ bạn thấy câu trả lời này cho đến khi tất cả thành viên gửi.");
+        }
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const groupId = currentRoom;
+            submit.disabled = true;
+            if (perspectiveFeedback) {
+                perspectiveFeedback.textContent = "Đang gửi câu trả lời...";
+                perspectiveFeedback.classList.remove("error");
+            }
+            try {
+                await apiFetch(
+                    `/groups/${encodeURIComponent(groupId)}/perspective-topics/${encodeURIComponent(topic.id)}/responses`,
+                    {
+                        method: "POST",
+                        body: JSON.stringify({
+                            direction: directionInput.value.trim(),
+                            answer: answerInput.value.trim(),
+                            assumption: assumptionInput.value.trim(),
+                        }),
+                    },
+                );
+                if (groupId !== currentRoom) return;
+                await refreshPerspectiveTopics();
+                if (perspectiveFeedback) {
+                    perspectiveFeedback.textContent = "Đã lưu riêng câu trả lời của bạn.";
+                }
+            } catch (error) {
+                if (perspectiveFeedback) {
+                    perspectiveFeedback.textContent = error.message || "Không thể gửi câu trả lời.";
+                    perspectiveFeedback.classList.add("error");
+                }
+            } finally {
+                submit.disabled = false;
+            }
+        });
+        perspectiveTopicDetail.append(form);
+        return;
+    }
+
+    const initialThought = document.createElement("section");
+    initialThought.className = "perspective-initial-thought";
+    addPerspectiveText(initialThought, "h4", "", `Suy nghĩ ban đầu của ${topic.creator}`);
+    addPerspectiveText(initialThought, "p", "", topic.initial_thought);
+    perspectiveTopicDetail.append(initialThought);
+
+    const map = topic.map || { common_words: [], directions: [] };
+    const mapSection = document.createElement("section");
+    mapSection.className = "perspective-map";
+    addPerspectiveText(mapSection, "h4", "", "Bản đồ thấu hiểu");
+    addPerspectiveText(
+        mapSection,
+        "p",
+        "perspective-map-note",
+        "Tổng hợp minh bạch từ cụm từ lặp lại và hướng nhìn do thành viên tự ghi — không dùng AI hay đưa ra lời khuyên.",
+    );
+    const commonWords = map.common_words || [];
+    addPerspectiveText(
+        mapSection,
+        "h5",
+        "",
+        commonWords.length ? "Điểm chung được nhắc đến" : "Chưa có từ khóa trùng lặp rõ ràng",
+    );
+    if (commonWords.length) {
+        addPerspectiveText(mapSection, "p", "perspective-tags", commonWords.map((item) => item.word).join(" · "));
+    }
+    const directions = map.directions || [];
+    const sharedDirections = directions.filter((item) => item.roles.length > 1);
+    const differingDirections = directions.filter((item) => item.roles.length === 1);
+    addPerspectiveText(mapSection, "h5", "", "Hướng nhìn trùng nhau");
+    addPerspectiveText(
+        mapSection,
+        "p",
+        "perspective-map-line",
+        sharedDirections.length
+            ? sharedDirections.map((item) => `${item.label} (${item.roles.join(", ")})`).join(" · ")
+            : "Chưa có hướng nhìn nào được ghi giống nhau.",
+    );
+    addPerspectiveText(mapSection, "h5", "", "Những hướng nhìn khác nhau");
+    addPerspectiveText(
+        mapSection,
+        "p",
+        "perspective-map-line",
+        differingDirections.length
+            ? differingDirections.map((item) => `${item.label} — ${item.roles[0]}`).join(" · ")
+            : "Không có hướng nhìn khác biệt được ghi nhận.",
+    );
+    const perspectives = topic.perspectives || [];
+    const assumptions = perspectives.filter((item) => item.assumption);
+    addPerspectiveText(mapSection, "h5", "", "Giả định và rủi ro nhóm bổ sung");
+    if (assumptions.length) {
+        const assumptionList = document.createElement("ul");
+        for (const item of assumptions) {
+            addPerspectiveText(assumptionList, "li", "", `${item.role}: ${item.assumption}`);
+        }
+        mapSection.append(assumptionList);
+    } else {
+        addPerspectiveText(mapSection, "p", "perspective-map-line", "Nhóm chưa ghi giả định hoặc rủi ro bổ sung.");
+    }
+    perspectiveTopicDetail.append(mapSection);
+
+    const perspectivesSection = document.createElement("section");
+    perspectivesSection.className = "perspective-revealed-list";
+    addPerspectiveText(perspectivesSection, "h4", "", "Các góc nhìn của nhóm");
+    for (const item of perspectives) {
+        const card = document.createElement("article");
+        card.className = "perspective-answer-card";
+        addPerspectiveText(card, "h5", "", `${item.role} · ${item.username}`);
+        addPerspectiveText(card, "p", "", item.answer);
+        perspectivesSection.append(card);
+    }
+    perspectiveTopicDetail.append(perspectivesSection);
+}
+
+async function openPerspectiveModal() {
+    if (!currentRoom.startsWith("group_") || !perspectiveModal) return;
+    perspectiveModal.classList.remove("hidden");
+    if (perspectiveCreateForm) perspectiveCreateForm.classList.add("hidden");
+    if (perspectiveFeedback) {
+        perspectiveFeedback.textContent = "";
+        perspectiveFeedback.classList.remove("error");
+    }
+    await refreshPerspectiveTopics();
+    if (!perspectiveRefreshTimer) {
+        perspectiveRefreshTimer = setInterval(() => {
+            if (perspectiveModal && !perspectiveModal.classList.contains("hidden")) {
+                refreshPerspectiveTopics();
+            }
+        }, 5000);
+    }
+}
+
+async function refreshPerspectiveTopics() {
+    const groupId = currentRoom;
+    if (!groupId.startsWith("group_")) return;
+    try {
+        const topics = await apiFetch(`/groups/${encodeURIComponent(groupId)}/perspective-topics`);
+        if (groupId !== currentRoom || !perspectiveModal || perspectiveModal.classList.contains("hidden")) return;
+        perspectiveTopics = topics;
+        renderPerspectiveTopics();
+        if (perspectiveFeedback?.classList.contains("error")) {
+            perspectiveFeedback.textContent = "";
+            perspectiveFeedback.classList.remove("error");
+        }
+    } catch (error) {
+        if (groupId !== currentRoom) return;
+        console.error("Không thể tải các chủ đề đổi góc nhìn:", error);
+        if (perspectiveFeedback) {
+            perspectiveFeedback.textContent = error.message || "Không thể tải các chủ đề đổi góc nhìn.";
+            perspectiveFeedback.classList.add("error");
+        }
+    }
 }
 
 async function openWorld(message = null) {
@@ -1302,6 +1929,73 @@ function renderWorldMemories(memories, truncated) {
 }
 
 if (worldOpenButton) worldOpenButton.addEventListener("click", () => openWorld());
+if (perspectiveOpenButton) perspectiveOpenButton.addEventListener("click", openPerspectiveModal);
+const perspectiveCloseButton = document.getElementById("perspective-close-btn");
+const perspectiveNewTopicButton = document.getElementById("perspective-new-topic-btn");
+const perspectiveCancelCreateButton = document.getElementById("perspective-cancel-create-btn");
+if (perspectiveCloseButton) {
+    perspectiveCloseButton.addEventListener("click", () => {
+        perspectiveModal.classList.add("hidden");
+        if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
+        perspectiveRefreshTimer = null;
+    });
+}
+if (perspectiveModal) {
+    perspectiveModal.addEventListener("click", (event) => {
+        if (event.target === perspectiveModal) {
+            perspectiveModal.classList.add("hidden");
+            if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
+            perspectiveRefreshTimer = null;
+        }
+    });
+}
+if (perspectiveNewTopicButton && perspectiveCreateForm) {
+    perspectiveNewTopicButton.addEventListener("click", () => {
+        perspectiveCreateForm.reset();
+        perspectiveCreateForm.classList.remove("hidden");
+        perspectiveTopicTitle?.focus();
+    });
+}
+if (perspectiveCancelCreateButton && perspectiveCreateForm) {
+    perspectiveCancelCreateButton.addEventListener("click", () => {
+        perspectiveCreateForm.classList.add("hidden");
+    });
+}
+if (perspectiveCreateForm) {
+    perspectiveCreateForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const groupId = currentRoom;
+        const submitButton = perspectiveCreateForm.querySelector('button[type="submit"]');
+        submitButton.disabled = true;
+        if (perspectiveFeedback) {
+            perspectiveFeedback.textContent = "Đang tạo chủ đề...";
+            perspectiveFeedback.classList.remove("error");
+        }
+        try {
+            const topic = await apiFetch(`/groups/${encodeURIComponent(groupId)}/perspective-topics`, {
+                method: "POST",
+                body: JSON.stringify({
+                    title: perspectiveTopicTitle.value.trim(),
+                    situation: perspectiveTopicSituation.value.trim(),
+                    initial_thought: perspectiveTopicThought.value.trim(),
+                }),
+            });
+            if (groupId !== currentRoom) return;
+            selectedPerspectiveTopicId = topic.id;
+            perspectiveCreateForm.reset();
+            perspectiveCreateForm.classList.add("hidden");
+            await refreshPerspectiveTopics();
+            if (perspectiveFeedback) perspectiveFeedback.textContent = "Chủ đề đã tạo. Mỗi thành viên sẽ thấy vai được giao cho mình.";
+        } catch (error) {
+            if (perspectiveFeedback) {
+                perspectiveFeedback.textContent = error.message || "Không thể tạo chủ đề.";
+                perspectiveFeedback.classList.add("error");
+            }
+        } finally {
+            submitButton.disabled = false;
+        }
+    });
+}
 const worldCloseBtn = document.getElementById("world-close-btn");
 if (worldCloseBtn) {
     worldCloseBtn.addEventListener("click", () => {
@@ -1385,6 +2079,27 @@ function deleteMessage(messageId) {
     }
 }
 
+function setPendingReply(message) {
+    pendingReply = {
+        id: message._id,
+        sender: message.sender || "Tin nhắn",
+        content: message.is_deleted
+            ? "Tin nhắn đã được thu hồi"
+            : message.content?.startsWith("/uploads/")
+                ? "Tệp đính kèm"
+                : (message.content || "").slice(0, 240),
+    };
+    if (replyComposerSender) replyComposerSender.textContent = `Đang trả lời ${pendingReply.sender}`;
+    if (replyComposerText) replyComposerText.textContent = pendingReply.content || "Tệp đính kèm";
+    replyComposerPreview?.classList.remove("hidden");
+    messageInput?.focus();
+}
+
+function clearPendingReply() {
+    pendingReply = null;
+    replyComposerPreview?.classList.add("hidden");
+}
+
 function scrollToBottom() {
     if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
@@ -1395,9 +2110,85 @@ function sendMessage() {
     if (!content) return;
     if (content.length > 2000) return alert("Tin nhắn không được dài quá 2000 ký tự.");
     if (socket?.readyState !== WebSocket.OPEN) return alert("Đang kết nối lại. Vui lòng thử gửi lại.");
-    socket.send(JSON.stringify({ type: "chat", content }));
+    socket.send(JSON.stringify({
+        type: "chat",
+        content,
+        ...(pendingReply ? { reply_to: pendingReply.id } : {}),
+    }));
     messageInput.value = "";
+    clearPendingReply();
 }
+
+function openMessageSearch() {
+    if (!currentRoom) {
+        alert("Hãy chọn một cuộc trò chuyện trước khi tìm tin nhắn.");
+        return;
+    }
+    if (messageSearchModal) messageSearchModal.classList.remove("hidden");
+    messageSearchQuery?.focus();
+    if (messageSearchStatus) messageSearchStatus.textContent = "";
+    messageSearchResults?.replaceChildren();
+}
+
+if (messageSearchOpenButton) messageSearchOpenButton.addEventListener("click", openMessageSearch);
+const messageSearchCloseButton = document.getElementById("message-search-close-btn");
+if (messageSearchCloseButton) {
+    messageSearchCloseButton.addEventListener("click", () => messageSearchModal?.classList.add("hidden"));
+}
+if (messageSearchModal) {
+    messageSearchModal.addEventListener("click", (event) => {
+        if (event.target === messageSearchModal) messageSearchModal.classList.add("hidden");
+    });
+}
+if (messageSearchForm) {
+    messageSearchForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const room = currentRoom;
+        const query = messageSearchQuery.value.trim();
+        if (query.length < 2) return;
+        const params = new URLSearchParams({ q: query });
+        if (messageSearchSender.value.trim()) params.set("sender", messageSearchSender.value.trim());
+        if (messageSearchFrom.value) params.set("date_from", messageSearchFrom.value);
+        if (messageSearchTo.value) params.set("date_to", messageSearchTo.value);
+        if (messageSearchStatus) messageSearchStatus.textContent = "Đang tìm...";
+        messageSearchResults?.replaceChildren();
+        try {
+            const results = await apiFetch(`/messages/${encodeURIComponent(room)}/search?${params}`);
+            if (room !== currentRoom) return;
+            if (messageSearchStatus) {
+                messageSearchStatus.textContent = results.length
+                    ? `Tìm thấy ${results.length}${results.length === 50 ? " tin nhắn (tối đa 50 kết quả)" : " tin nhắn"}.`
+                    : "Không tìm thấy tin nhắn phù hợp.";
+            }
+            for (const result of results) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "message-search-result";
+                const sender = document.createElement("strong");
+                sender.textContent = result.sender || "Thành viên";
+                const text = document.createElement("span");
+                text.textContent = result.content || "";
+                const time = document.createElement("small");
+                const date = result.created_at ? new Date(result.created_at) : null;
+                time.textContent = `${result.timestamp || ""}${date && !Number.isNaN(date.valueOf())
+                    ? ` · ${date.toLocaleDateString("vi-VN")}` : ""}`;
+                button.append(sender, text, time);
+                button.addEventListener("click", () => {
+                    if (!document.getElementById(`msg-${result._id}`)) renderMessage(result);
+                    const message = document.getElementById(`msg-${result._id}`);
+                    message?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    message?.classList.add("message-reply-target");
+                    setTimeout(() => message?.classList.remove("message-reply-target"), 1400);
+                    messageSearchModal.classList.add("hidden");
+                });
+                messageSearchResults.append(button);
+            }
+        } catch (error) {
+            if (messageSearchStatus) messageSearchStatus.textContent = error.message || "Không thể tìm tin nhắn.";
+        }
+    });
+}
+if (replyComposerCancel) replyComposerCancel.addEventListener("click", clearPendingReply);
 
 if (sendBtn) sendBtn.addEventListener("click", sendMessage);
 if (messageInput) {
@@ -1496,7 +2287,12 @@ async function sendChatFile(file, expectedRoom = currentRoom, expectedSocket = s
         if (expectedRoom !== currentRoom || expectedSocket !== socket || expectedSocket.readyState !== WebSocket.OPEN) {
             throw new Error("Bạn đã chuyển cuộc trò chuyện hoặc bị mất kết nối; tệp chưa được gửi.");
         }
-        expectedSocket.send(JSON.stringify({ type: "chat", content: data.url }));
+        expectedSocket.send(JSON.stringify({
+            type: "chat",
+            content: data.url,
+            ...(pendingReply ? { reply_to: pendingReply.id } : {}),
+        }));
+        clearPendingReply();
         return true;
     } catch (error) {
         alert("Lỗi gửi tệp: " + error.message);
@@ -1796,6 +2592,10 @@ document.addEventListener("keydown", (event) => {
 
 if (logoutBtn) logoutBtn.addEventListener("click", () => signOut());
 if (userSearch) userSearch.addEventListener("input", renderUsersList);
+if (userSearch) userSearch.addEventListener("input", renderGroupsList);
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && currentRoom) markChatRead(currentRoom);
+});
 
 const backUsersBtn = document.getElementById("back-users-btn");
 if (backUsersBtn) {
