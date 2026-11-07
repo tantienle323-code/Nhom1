@@ -48,6 +48,21 @@ const callHangupButton = document.getElementById("call-hangup-btn");
 const messagesContainer = document.getElementById("messages-container");
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
+const emojiPickerButton = document.getElementById("emoji-picker-btn");
+const emojiPicker = document.getElementById("emoji-picker");
+const openCameraButton = document.getElementById("open-camera-btn");
+const cameraModal = document.getElementById("camera-modal");
+const cameraPreview = document.getElementById("camera-preview");
+const recordedVideoPreview = document.getElementById("recorded-video-preview");
+const cameraCanvas = document.getElementById("camera-canvas");
+const closeCameraButton = document.getElementById("close-camera-btn");
+const capturePhotoButton = document.getElementById("capture-photo-btn");
+const retakePhotoButton = document.getElementById("retake-photo-btn");
+const sendPhotoButton = document.getElementById("send-photo-btn");
+const startVideoRecordingButton = document.getElementById("start-video-recording-btn");
+const stopVideoRecordingButton = document.getElementById("stop-video-recording-btn");
+const sendRecordedVideoButton = document.getElementById("send-recorded-video-btn");
+const cameraRecordingStatus = document.getElementById("camera-recording-status");
 const usersList = document.getElementById("users-list");
 const groupsList = document.getElementById("groups-list");
 const groupModal = document.getElementById("group-modal");
@@ -192,6 +207,7 @@ function showLogin() {
 }
 
 function signOut(reload = true) {
+    closeCamera();
     finishVideoCall();
     resetMusicSyncSession(true);
     if (musicYouTubeFrame) {
@@ -443,10 +459,11 @@ async function switchGroupChat(group) {
         const history = await apiFetch(`/groups/${encodeURIComponent(room)}/messages`);
         if (currentRoom !== room) return;
         if (!history.length) {
-            const notice = document.createElement("div");
-            notice.className = "tg-empty-notice";
-            notice.textContent = "Nhóm chưa có tin nhắn. Hãy bắt đầu trò chuyện!";
-            messagesContainer.append(notice);
+            showEmptyConversation(
+                "Nhóm đang chờ tin nhắn",
+                "Gửi lời chào đầu tiên để mọi người cùng tham gia cuộc trò chuyện.",
+                "👥",
+            );
         } else {
             for (const message of history) renderMessage(message);
         }
@@ -995,10 +1012,11 @@ async function loadHistory(room) {
     const history = await apiFetch(`/messages/${encodeURIComponent(room)}`);
     if (currentRoom !== room) return;
     if (!history.length) {
-        const notice = document.createElement("div");
-        notice.className = "tg-empty-notice";
-        notice.textContent = "Chưa có tin nhắn. Hãy bắt đầu trò chuyện!";
-        messagesContainer.append(notice);
+        showEmptyConversation(
+            "Bắt đầu cuộc trò chuyện",
+            "Gửi lời chào đầu tiên để mở đầu câu chuyện của hai bạn.",
+            "✉",
+        );
     } else {
         for (const message of history) renderMessage(message);
     }
@@ -1078,7 +1096,7 @@ function connectWebSocket(room, username) {
 function renderMessage(message) {
     if (!messagesContainer) return;
     if (message._id && document.getElementById(`msg-${message._id}`)) return;
-    messagesContainer.querySelector(".tg-empty-notice")?.remove();
+    messagesContainer.querySelector(".tg-empty-notice, .chat-welcome, .chat-thread-empty")?.remove();
     const item = document.createElement("div");
     const isSent = message.sender === currentUsername;
     item.className = `msg ${isSent ? "sent" : "received"}`;
@@ -1158,6 +1176,22 @@ function renderMessage(message) {
         item.append(actions);
     }
     messagesContainer.append(item);
+}
+
+function showEmptyConversation(title, description, icon) {
+    if (!messagesContainer) return;
+    const emptyState = document.createElement("section");
+    emptyState.className = "chat-thread-empty";
+    const badge = document.createElement("span");
+    badge.className = "chat-thread-empty-icon";
+    badge.setAttribute("aria-hidden", "true");
+    badge.textContent = icon;
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    const detail = document.createElement("p");
+    detail.textContent = description;
+    emptyState.append(badge, heading, detail);
+    messagesContainer.append(emptyState);
 }
 
 function clearMemorySource() {
@@ -1375,42 +1409,390 @@ if (messageInput) {
     });
 }
 
+const chatEmojis = [
+    "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣",
+    "😊", "😇", "🙂", "🙃", "😉", "😍", "🥰", "😘",
+    "😋", "😜", "🤔", "🤗", "🥳", "😭", "😢", "😡",
+    "👍", "👎", "👏", "🙌", "🙏", "❤️", "💖", "💕",
+    "💯", "🔥", "✨", "🎉", "🎂", "🌹", "🐱", "🐶",
+];
+let emojiSelectionStart = messageInput?.selectionStart || 0;
+let emojiSelectionEnd = messageInput?.selectionEnd || 0;
+
+if (emojiPicker && emojiPickerButton) {
+    for (const emoji of chatEmojis) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = emoji;
+        button.setAttribute("aria-label", emoji);
+        button.title = emoji;
+        button.addEventListener("pointerdown", (event) => event.preventDefault());
+        button.addEventListener("click", () => {
+            if (!messageInput) return;
+            messageInput.focus();
+            const start = Math.min(emojiSelectionStart, messageInput.value.length);
+            const end = Math.min(Math.max(emojiSelectionEnd, start), messageInput.value.length);
+            messageInput.setRangeText(emoji, start, end, "end");
+            emojiSelectionStart = emojiSelectionEnd = start + emoji.length;
+            emojiPicker.classList.add("hidden");
+            emojiPickerButton.setAttribute("aria-expanded", "false");
+        });
+        emojiPicker.append(button);
+    }
+
+    emojiPickerButton.addEventListener("click", () => {
+        if (messageInput) {
+            emojiSelectionStart = messageInput.selectionStart;
+            emojiSelectionEnd = messageInput.selectionEnd;
+        }
+        const isOpening = emojiPicker.classList.contains("hidden");
+        emojiPicker.classList.toggle("hidden", !isOpening);
+        emojiPickerButton.setAttribute("aria-expanded", String(isOpening));
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+        if (!emojiPicker.contains(event.target) && !emojiPickerButton.contains(event.target)) {
+            emojiPicker.classList.add("hidden");
+            emojiPickerButton.setAttribute("aria-expanded", "false");
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !emojiPicker.classList.contains("hidden")) {
+            emojiPicker.classList.add("hidden");
+            emojiPickerButton.setAttribute("aria-expanded", "false");
+            emojiPickerButton.focus();
+        }
+    });
+}
+
 const fileInput = document.getElementById("file-input");
+async function sendChatFile(file, expectedRoom = currentRoom, expectedSocket = socket) {
+    if (!currentRoom) {
+        alert("Vui lòng chọn người cần nhắn trước khi đính kèm tệp.");
+        return false;
+    }
+    if (currentRoom !== expectedRoom) {
+        alert("Bạn đã đổi cuộc trò chuyện; tệp chưa được gửi.");
+        return false;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+        alert("Tệp vượt quá giới hạn 20 MB.");
+        return false;
+    }
+    if (socket !== expectedSocket || expectedSocket?.readyState !== WebSocket.OPEN) {
+        alert("Đang kết nối lại. Vui lòng thử gửi lại.");
+        return false;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        const data = await apiFetch("/upload", {
+            method: "POST",
+            body: formData
+        });
+        if (expectedRoom !== currentRoom || expectedSocket !== socket || expectedSocket.readyState !== WebSocket.OPEN) {
+            throw new Error("Bạn đã chuyển cuộc trò chuyện hoặc bị mất kết nối; tệp chưa được gửi.");
+        }
+        expectedSocket.send(JSON.stringify({ type: "chat", content: data.url }));
+        return true;
+    } catch (error) {
+        alert("Lỗi gửi tệp: " + error.message);
+        return false;
+    }
+}
+
 if (fileInput) {
     fileInput.addEventListener("change", async function (e) {
         const file = e.target.files[0];
         if (!file) return;
-        if (!currentRoom) return alert("Vui lòng chọn người cần nhắn trước khi đính kèm tệp.");
-        if (file.size > 20 * 1024 * 1024) {
-            fileInput.value = "";
-            return alert("Tệp vượt quá giới hạn 20 MB.");
-        }
-        if (socket?.readyState !== WebSocket.OPEN) {
-            fileInput.value = "";
-            return alert("Đang kết nối lại. Vui lòng thử gửi lại.");
-        }
+        await sendChatFile(file);
+        fileInput.value = "";
+    });
+}
 
-        const formData = new FormData();
-        formData.append("file", file);
-        const uploadRoom = currentRoom;
-        const uploadSocket = socket;
+let cameraStream = null;
+let cameraAudioStream = null;
+let capturedPhoto = null;
+let recordedVideo = null;
+let recordedVideoUrl = "";
+let mediaRecorder = null;
+let recordedVideoChunks = [];
+let cameraRoom = "";
+let cameraSocket = null;
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+function stopCamera() {
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    cameraAudioStream?.getTracks().forEach((track) => track.stop());
+    cameraStream = null;
+    cameraAudioStream = null;
+    if (cameraPreview) cameraPreview.srcObject = null;
+}
+
+function closeCamera() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.onstop = null;
+        mediaRecorder.stop();
+    }
+    mediaRecorder = null;
+    stopCamera();
+    capturedPhoto = null;
+    recordedVideo = null;
+    recordedVideoChunks = [];
+    if (recordedVideoUrl) URL.revokeObjectURL(recordedVideoUrl);
+    recordedVideoUrl = "";
+    if (recordedVideoPreview) {
+        recordedVideoPreview.pause();
+        recordedVideoPreview.removeAttribute("src");
+        recordedVideoPreview.load();
+    }
+    cameraCanvas?.getContext("2d")?.clearRect(0, 0, cameraCanvas.width, cameraCanvas.height);
+    cameraModal?.classList.add("hidden");
+    cameraPreview?.classList.remove("hidden");
+    recordedVideoPreview?.classList.add("hidden");
+    cameraCanvas?.classList.add("hidden");
+    capturePhotoButton?.classList.remove("hidden");
+    startVideoRecordingButton?.classList.remove("hidden");
+    stopVideoRecordingButton?.classList.add("hidden");
+    retakePhotoButton?.classList.add("hidden");
+    sendPhotoButton?.classList.add("hidden");
+    sendRecordedVideoButton?.classList.add("hidden");
+    if (cameraRecordingStatus) cameraRecordingStatus.textContent = "";
+    cameraRoom = "";
+    cameraSocket = null;
+}
+
+if (openCameraButton) {
+    openCameraButton.addEventListener("click", async () => {
+        if (!currentRoom) return alert("Vui lòng chọn một cuộc trò chuyện trước khi chụp ảnh.");
+        if (!navigator.mediaDevices?.getUserMedia) {
+            return alert("Trình duyệt không hỗ trợ camera hoặc trang chưa được mở qua HTTPS.");
+        }
+        const requestedRoom = currentRoom;
+        const requestedSocket = socket;
+        openCameraButton.disabled = true;
         try {
-            const data = await apiFetch("/upload", {
-                method: "POST",
-                body: formData
-            });
-            if (uploadRoom !== currentRoom || uploadSocket !== socket || uploadSocket.readyState !== WebSocket.OPEN) {
-                throw new Error("Bạn đã chuyển cuộc trò chuyện hoặc bị mất kết nối; tệp chưa được gửi.");
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+            cameraPreview.srcObject = cameraStream;
+            await cameraPreview.play();
+            if (requestedRoom !== currentRoom || requestedSocket !== socket) {
+                stopCamera();
+                return alert("Cuộc trò chuyện đã thay đổi; camera chưa được mở.");
             }
-            uploadSocket.send(JSON.stringify({ type: "chat", content: data.url }));
-            fileInput.value = "";
+            cameraRoom = requestedRoom;
+            cameraSocket = requestedSocket;
+            cameraCanvas.classList.add("hidden");
+            cameraPreview.classList.remove("hidden");
+            recordedVideoPreview.classList.add("hidden");
+            capturePhotoButton.classList.remove("hidden");
+            startVideoRecordingButton.classList.remove("hidden");
+            stopVideoRecordingButton.classList.add("hidden");
+            retakePhotoButton.classList.add("hidden");
+            sendPhotoButton.classList.add("hidden");
+            sendRecordedVideoButton.classList.add("hidden");
+            cameraRecordingStatus.textContent = "";
+            cameraModal.classList.remove("hidden");
         } catch (error) {
-            fileInput.value = "";
-            alert("Lỗi gửi tệp: " + error.message);
+            stopCamera();
+            alert("Không thể mở camera. Hãy kiểm tra quyền truy cập camera và thử lại.");
+        } finally {
+            openCameraButton.disabled = false;
         }
     });
 }
+
+if (capturePhotoButton) {
+    capturePhotoButton.addEventListener("click", () => {
+        if (!cameraPreview.videoWidth || !cameraPreview.videoHeight) {
+            return alert("Camera chưa sẵn sàng. Vui lòng thử lại.");
+        }
+        cameraCanvas.width = cameraPreview.videoWidth;
+        cameraCanvas.height = cameraPreview.videoHeight;
+        const context = cameraCanvas.getContext("2d");
+        if (!context) return alert("Không thể chụp ảnh trên trình duyệt này.");
+        context.drawImage(cameraPreview, 0, 0, cameraCanvas.width, cameraCanvas.height);
+        cameraCanvas.toBlob((blob) => {
+            if (!blob) return alert("Không thể tạo ảnh chụp. Vui lòng thử lại.");
+            capturedPhoto = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+            stopCamera();
+            cameraPreview.classList.add("hidden");
+            cameraCanvas.classList.remove("hidden");
+            recordedVideoPreview.classList.add("hidden");
+            capturePhotoButton.classList.add("hidden");
+            startVideoRecordingButton.classList.add("hidden");
+            retakePhotoButton.classList.remove("hidden");
+            sendPhotoButton.classList.remove("hidden");
+        }, "image/jpeg", 0.9);
+    });
+}
+
+if (retakePhotoButton) {
+    retakePhotoButton.addEventListener("click", async () => {
+        retakePhotoButton.disabled = true;
+        try {
+            cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+            cameraPreview.srcObject = cameraStream;
+            await cameraPreview.play();
+            capturedPhoto = null;
+            cameraCanvas.classList.add("hidden");
+            cameraPreview.classList.remove("hidden");
+            recordedVideoPreview.classList.add("hidden");
+            retakePhotoButton.classList.add("hidden");
+            sendPhotoButton.classList.add("hidden");
+            capturePhotoButton.classList.remove("hidden");
+            startVideoRecordingButton.classList.remove("hidden");
+            cameraRecordingStatus.textContent = "";
+        } catch (error) {
+            stopCamera();
+            alert("Không thể mở lại camera. Hãy kiểm tra quyền truy cập camera và thử lại.");
+        } finally {
+            retakePhotoButton.disabled = false;
+        }
+    });
+}
+
+if (startVideoRecordingButton) {
+    startVideoRecordingButton.addEventListener("click", async () => {
+        if (!cameraStream?.getVideoTracks().length) {
+            return alert("Camera chưa sẵn sàng. Vui lòng đóng và mở lại camera.");
+        }
+        if (!window.MediaRecorder) {
+            return alert("Trình duyệt không hỗ trợ quay video.");
+        }
+        const mimeType = typeof MediaRecorder.isTypeSupported === "function"
+            ? ["video/webm;codecs=vp8,opus", "video/webm", "video/mp4"]
+                .find((type) => MediaRecorder.isTypeSupported(type))
+            : "";
+        if (!mimeType) return alert("Trình duyệt không hỗ trợ định dạng video được máy chủ chấp nhận.");
+
+        startVideoRecordingButton.disabled = true;
+        try {
+            cameraAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            if (!cameraModal || cameraModal.classList.contains("hidden") || !cameraStream) {
+                stopCamera();
+                return;
+            }
+            const recordingStream = new MediaStream([
+                ...cameraStream.getVideoTracks(),
+                ...cameraAudioStream.getAudioTracks(),
+            ]);
+            recordedVideoChunks = [];
+            recordedVideo = null;
+            let exceededLimit = false;
+            mediaRecorder = new MediaRecorder(recordingStream, { mimeType });
+            mediaRecorder.ondataavailable = (event) => {
+                if (!event.data.size) return;
+                const totalSize = recordedVideoChunks.reduce((total, chunk) => total + chunk.size, 0) + event.data.size;
+                if (totalSize > MAX_UPLOAD_BYTES) {
+                    exceededLimit = true;
+                    if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+                    return;
+                }
+                recordedVideoChunks.push(event.data);
+            };
+            mediaRecorder.onstop = () => {
+                cameraAudioStream?.getTracks().forEach((track) => track.stop());
+                cameraAudioStream = null;
+                startVideoRecordingButton.classList.remove("hidden");
+                startVideoRecordingButton.disabled = false;
+                stopVideoRecordingButton.classList.add("hidden");
+                if (exceededLimit) {
+                    recordedVideoChunks = [];
+                    capturePhotoButton.classList.remove("hidden");
+                    cameraRecordingStatus.textContent = "Video vượt quá giới hạn 20 MB.";
+                    alert("Video đã vượt quá giới hạn 20 MB. Vui lòng quay clip ngắn hơn.");
+                    mediaRecorder = null;
+                    return;
+                }
+                const videoBlob = new Blob(recordedVideoChunks, { type: mimeType });
+                recordedVideoChunks = [];
+                if (!videoBlob.size) {
+                    capturePhotoButton.classList.remove("hidden");
+                    cameraRecordingStatus.textContent = "Không tạo được video. Vui lòng thử lại.";
+                    alert("Không tạo được video. Vui lòng thử quay lại.");
+                    mediaRecorder = null;
+                    return;
+                }
+                recordedVideo = new File(
+                    [videoBlob],
+                    `video-${Date.now()}.${mimeType.startsWith("video/mp4") ? "mp4" : "webm"}`,
+                    { type: mimeType.startsWith("video/mp4") ? "video/mp4" : "video/webm" },
+                );
+                recordedVideoUrl = URL.createObjectURL(recordedVideo);
+                recordedVideoPreview.src = recordedVideoUrl;
+                cameraPreview.classList.add("hidden");
+                cameraCanvas.classList.add("hidden");
+                recordedVideoPreview.classList.remove("hidden");
+                capturePhotoButton.classList.add("hidden");
+                startVideoRecordingButton.classList.add("hidden");
+                retakePhotoButton.classList.remove("hidden");
+                sendRecordedVideoButton.classList.remove("hidden");
+                cameraRecordingStatus.textContent = `Đã quay ${(recordedVideo.size / (1024 * 1024)).toFixed(1)} MB.`;
+                mediaRecorder = null;
+            };
+            mediaRecorder.start(1000);
+            capturePhotoButton.classList.add("hidden");
+            startVideoRecordingButton.classList.add("hidden");
+            stopVideoRecordingButton.classList.remove("hidden");
+            cameraRecordingStatus.textContent = "Đang quay video có âm thanh (tối đa 20 MB)...";
+        } catch (error) {
+            cameraAudioStream?.getTracks().forEach((track) => track.stop());
+            cameraAudioStream = null;
+            mediaRecorder = null;
+            capturePhotoButton.classList.remove("hidden");
+            startVideoRecordingButton.classList.remove("hidden");
+            stopVideoRecordingButton.classList.add("hidden");
+            cameraRecordingStatus.textContent = "";
+            alert("Không thể bắt đầu quay video. Hãy kiểm tra quyền truy cập micro và thử lại.");
+        } finally {
+            startVideoRecordingButton.disabled = false;
+        }
+    });
+}
+
+if (stopVideoRecordingButton) {
+    stopVideoRecordingButton.addEventListener("click", () => {
+        if (mediaRecorder?.state === "recording") {
+            stopVideoRecordingButton.disabled = true;
+            cameraRecordingStatus.textContent = "Đang xử lý video...";
+            mediaRecorder.stop();
+            stopVideoRecordingButton.disabled = false;
+        }
+    });
+}
+
+if (sendRecordedVideoButton) {
+    sendRecordedVideoButton.addEventListener("click", async () => {
+        if (!recordedVideo) return;
+        sendRecordedVideoButton.disabled = true;
+        const sent = await sendChatFile(recordedVideo, cameraRoom, cameraSocket);
+        sendRecordedVideoButton.disabled = false;
+        if (sent) closeCamera();
+    });
+}
+
+if (sendPhotoButton) {
+    sendPhotoButton.addEventListener("click", async () => {
+        if (!capturedPhoto) return;
+        sendPhotoButton.disabled = true;
+        const sent = await sendChatFile(capturedPhoto, cameraRoom, cameraSocket);
+        sendPhotoButton.disabled = false;
+        if (sent) closeCamera();
+    });
+}
+
+if (closeCameraButton) closeCameraButton.addEventListener("click", closeCamera);
+if (cameraModal) {
+    cameraModal.addEventListener("click", (event) => {
+        if (event.target === cameraModal) closeCamera();
+    });
+}
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && cameraModal && !cameraModal.classList.contains("hidden")) closeCamera();
+});
 
 if (logoutBtn) logoutBtn.addEventListener("click", () => signOut());
 if (userSearch) userSearch.addEventListener("input", renderUsersList);

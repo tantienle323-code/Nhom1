@@ -4,15 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261106-video-call">
+    <link rel="stylesheet" href="style.css?v=20261107-chat-interior">
 </head>
 <body>
-    <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ (TELEGRAM STYLE) -->
+    <!-- Màn hình đăng nhập / đăng ký -->
     <div id="login-screen" class="tg-auth-container">
         <div class="tg-auth-card">
             <div class="tg-logo">✈️</div>
+            <p class="tg-auth-eyebrow">KẾT NỐI MỌI LÚC</p>
             <h2>Ứng dụng chat</h2>
-            <p style="color: #7f91a4; font-size: 13px; margin-bottom: 20px;">Vui lòng đăng nhập để bắt đầu trò chuyện</p>
+            <p class="tg-auth-description">Đăng nhập để tiếp tục những cuộc trò chuyện của bạn.</p>
 
             <div class="auth-tabs">
                 <button id="tab-login-btn" class="active">Đăng nhập</button>
@@ -28,10 +29,18 @@
         </div>
     </div>
 
-    <!-- 2. GIAO DIỆN TELEGRAM DESKTOP 2 CỘT -->
+    <!-- Giao diện chat -->
     <div id="chat-screen" class="tg-layout hidden">
         <!-- CỘT TRÁI: SIDEBAR DANH SÁCH CHAT -->
         <aside class="tg-sidebar">
+            <div class="tg-sidebar-brand">
+                <span class="tg-brand-mark" aria-hidden="true">✈</span>
+                <div>
+                    <h1>Chat Realtime</h1>
+                    <p>Không gian kết nối riêng tư</p>
+                </div>
+                <span class="tg-brand-status" title="Ứng dụng hoạt động"><span></span> Trực tuyến</span>
+            </div>
             <div class="tg-sidebar-header">
                 <button id="my-profile-modal-btn" class="tg-menu-btn" title="Cài đặt cá nhân">☰</button>
                 <div class="tg-search-wrapper">
@@ -71,18 +80,69 @@
             </div>
 
             <div class="tg-messages-container" id="messages-container">
-                <div class="tg-empty-notice">Chọn một cuộc trò chuyện để bắt đầu gửi tin nhắn</div>
+                <section class="chat-welcome" aria-labelledby="chat-welcome-title">
+                    <div class="welcome-visual" aria-hidden="true">
+                        <div class="welcome-orbit welcome-orbit-one"></div>
+                        <div class="welcome-orbit welcome-orbit-two"></div>
+                        <div class="welcome-spark welcome-spark-one">✦</div>
+                        <div class="welcome-spark welcome-spark-two">✧</div>
+                        <div class="welcome-bubble welcome-bubble-back">•••</div>
+                        <div class="welcome-bubble welcome-bubble-front">👋</div>
+                    </div>
+                    <div class="welcome-copy">
+                        <p class="welcome-eyebrow"><span></span> KHÔNG GIAN CỦA BẠN</p>
+                        <h2 id="chat-welcome-title">Mọi cuộc trò chuyện<br />đều bắt đầu từ đây.</h2>
+                        <p>Chọn một người bạn hoặc nhóm ở bên trái để nhắn tin, gọi video và chia sẻ những khoảnh khắc của bạn.</p>
+                        <div class="welcome-hint"><span aria-hidden="true">←</span> Chọn một cuộc trò chuyện để tiếp tục</div>
+                    </div>
+                    <div class="welcome-features" aria-label="Tính năng trò chuyện">
+                        <div class="welcome-feature">
+                            <span class="welcome-feature-icon welcome-feature-blue" aria-hidden="true">✉</span>
+                            <div><h3>Nhắn tin riêng tư</h3><p>Kết nối theo cách của bạn</p></div>
+                        </div>
+                        <div class="welcome-feature">
+                            <span class="welcome-feature-icon welcome-feature-green" aria-hidden="true">◉</span>
+                            <div><h3>Gọi video trực tiếp</h3><p>Gần nhau hơn dù ở xa</p></div>
+                        </div>
+                        <div class="welcome-feature">
+                            <span class="welcome-feature-icon welcome-feature-purple" aria-hidden="true">✧</span>
+                            <div><h3>Chia sẻ khoảnh khắc</h3><p>Ảnh, video và nhiều hơn</p></div>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <div class="tg-chat-footer">
-                <!-- THÊM Ô ẨN VÀ NÚT CHỌN TỆP (ẢNH/VIDEO) -->
                 <input type="file" id="file-input" accept="image/*,video/*" style="display: none;" />
-                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh hoặc video" onclick="document.getElementById('file-input').click()">📎</button>
-                
-                <input type="text" id="message-input" placeholder="Viết tin nhắn..." />
-                <button id="send-btn" class="tg-send-btn">✈️</button>
+                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh hoặc video" aria-label="Gửi ảnh hoặc video" onclick="document.getElementById('file-input').click()">📎</button>
+                <button id="open-camera-btn" class="tg-icon-btn" type="button" title="Chụp ảnh trực tiếp" aria-label="Chụp ảnh trực tiếp">📷</button>
+                <div class="tg-message-composer">
+                    <div id="emoji-picker" class="emoji-picker hidden" role="group" aria-label="Chọn emoji"></div>
+                    <input type="text" id="message-input" placeholder="Viết tin nhắn..." />
+                </div>
+                <button id="emoji-picker-btn" class="tg-icon-btn" type="button" title="Chèn emoji" aria-label="Mở bảng emoji" aria-expanded="false" aria-controls="emoji-picker">😊</button>
+                <button id="send-btn" class="tg-send-btn" type="button" aria-label="Gửi tin nhắn">✈️</button>
             </div>
         </main>
+    </div>
+
+    <div id="camera-modal" class="modal-overlay hidden">
+        <section class="camera-modal-card" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
+            <h3 id="camera-modal-title">Chụp ảnh hoặc quay video</h3>
+            <video id="camera-preview" autoplay playsinline aria-label="Khung xem trước camera"></video>
+            <video id="recorded-video-preview" class="hidden" controls playsinline aria-label="Xem lại video đã quay"></video>
+            <canvas id="camera-canvas" class="hidden"></canvas>
+            <p id="camera-recording-status" class="camera-recording-status" aria-live="polite"></p>
+            <div class="tg-modal-actions">
+                <button id="close-camera-btn" class="btn-cancel" type="button">Hủy</button>
+                <button id="retake-photo-btn" class="btn-cancel hidden" type="button">Chụp lại / Quay lại</button>
+                <button id="capture-photo-btn" class="btn-telegram" type="button">Chụp ảnh</button>
+                <button id="send-photo-btn" class="btn-telegram hidden" type="button">Gửi ảnh</button>
+                <button id="start-video-recording-btn" class="btn-telegram" type="button">🔴 Quay video</button>
+                <button id="stop-video-recording-btn" class="btn-cancel hidden" type="button">Dừng quay</button>
+                <button id="send-recorded-video-btn" class="btn-telegram hidden" type="button">Gửi video</button>
+            </div>
+        </section>
     </div>
 
     <!-- MODAL PROFILE/SETTINGS (TELEGRAM STYLE) -->
@@ -248,6 +308,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261106-video-call"></script>
+    <script src="app.js?v=20261107-camera-capture"></script>
 </body>
 </html>
