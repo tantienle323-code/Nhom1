@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from starlette.websockets import WebSocketDisconnected
 
@@ -35,6 +36,7 @@ from database import (
     user_collection,
     world_game_collection,
     world_memory_collection,
+    world_pet_collection,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,7 @@ async def lifespan(_: FastAPI):
         await user_collection.create_index("username", unique=True)
         await message_collection.create_index([("room", 1), ("_id", -1)])
         await message_collection.create_index([("room", 1), ("sender", 1), ("_id", -1)])
+        await world_pet_collection.create_index("room", unique=True)
         if ADMIN_USERNAME:
             admin = await user_collection.find_one({"username": ADMIN_USERNAME})
             if not admin:
@@ -208,6 +211,25 @@ class WorldMemorySchema(BaseModel):
     @classmethod
     def normalize_note(cls, value: str) -> str:
         return value.strip()
+
+
+class SharedPetCreateSchema(BaseModel):
+    name: str = Field(min_length=1, max_length=24)
+    species: str = Field(pattern=r"^(cat|dog|rabbit|dragon|capybara)$")
+    timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Thú cưng cần có tên.")
+        return value
+
+
+class SharedPetActionSchema(BaseModel):
+    action: str = Field(pattern=r"^(feed|play|pet|groom)$")
+    timezone_offset_minutes: int = Field(default=0, ge=-840, le=840)
 
 
 class GroupCreateSchema(BaseModel):
@@ -492,6 +514,176 @@ def build_world_progress(message_count: int, memory_count: int, game_count: int)
         "score": score,
         "next_threshold": next_threshold,
         "progress": progress,
+    }
+
+
+PET_SPECIES = {
+    "cat": {"emoji": "🐱", "label": "Mèo"},
+    "dog": {"emoji": "🐶", "label": "Cún"},
+    "rabbit": {"emoji": "🐰", "label": "Thỏ"},
+    "dragon": {"emoji": "🐲", "label": "Rồng"},
+    "capybara": {"emoji": "🐹", "label": "Capybara"},
+}
+PET_ACTIONS = {
+    "feed": {
+        "experience": 5,
+        "affection": 0,
+        "message": "vừa được cho ăn ngon",
+        "needs": {"hunger": 45, "happiness": 5},
+    },
+    "play": {
+        "experience": 8,
+        "affection": 1,
+        "message": "đang vui vẻ chơi đùa",
+        "needs": {"hunger": -5, "energy": -16, "happiness": 25, "cleanliness": -6},
+    },
+    "pet": {
+        "experience": 3,
+        "affection": 1,
+        "message": "được vuốt ve âu yếm",
+        "needs": {"happiness": 12, "energy": 4},
+    },
+    "groom": {
+        "experience": 5,
+        "affection": 1,
+        "message": "vừa được chải chuốt",
+        "needs": {"cleanliness": 35, "happiness": 4},
+    },
+}
+PET_ACTION_COOLDOWN_SECONDS = 5
+PET_NEED_DEFAULTS = {
+    "hunger": 85.0,
+    "energy": 80.0,
+    "happiness": 75.0,
+    "cleanliness": 90.0,
+}
+
+
+def advance_shared_pet(
+    pet: dict,
+    now: datetime.datetime,
+    timezone_offset_minutes: int | None = None,
+) -> dict:
+    updated = dict(pet)
+    timezone_offset_minutes = pet.get(
+        "timezone_offset_minutes",
+        timezone_offset_minutes if timezone_offset_minutes is not None else 0,
+    )
+    updated["timezone_offset_minutes"] = timezone_offset_minutes
+    last_updated = pet.get("last_updated") or pet.get("created_at") or now
+    if last_updated.tzinfo is None:
+        last_updated = last_updated.replace(tzinfo=datetime.timezone.utc)
+    elapsed_seconds = max(0, (now - last_updated).total_seconds())
+    needs = {
+        key: float(pet.get(key, value))
+        for key, value in PET_NEED_DEFAULTS.items()
+    }
+
+    if elapsed_seconds > 30 * 24 * 60 * 60:
+        local_now = now - datetime.timedelta(minutes=timezone_offset_minutes)
+        needs.update({
+            "hunger": 10.0,
+            "energy": 85.0 if local_now.hour >= 22 or local_now.hour < 7 else 55.0,
+            "happiness": 25.0,
+            "cleanliness": 35.0,
+        })
+    else:
+        cursor = last_updated
+        while cursor < now:
+            step_end = min(now, cursor + datetime.timedelta(minutes=15))
+            hours = (step_end - cursor).total_seconds() / 3600
+            midpoint = cursor + (step_end - cursor) / 2 - datetime.timedelta(
+                minutes=timezone_offset_minutes
+            )
+            sleeping = midpoint.hour >= 22 or midpoint.hour < 7
+            needs["hunger"] = max(10, needs["hunger"] - 0.9 * hours)
+            needs["cleanliness"] = max(35, needs["cleanliness"] - 0.22 * hours)
+            if sleeping:
+                needs["energy"] = min(100, needs["energy"] + 4 * hours)
+            else:
+                needs["energy"] = max(20, needs["energy"] - 1.6 * hours)
+                needs["happiness"] = max(25, needs["happiness"] - 0.45 * hours)
+            cursor = step_end
+
+    updated.update({key: round(value, 1) for key, value in needs.items()})
+    updated["last_updated"] = now
+    local_now = now - datetime.timedelta(minutes=timezone_offset_minutes)
+    updated["sleeping"] = (
+        local_now.hour >= 22 or local_now.hour < 7 or needs["energy"] <= 22
+    )
+    if updated["sleeping"]:
+        updated["mood"] = "đang ngủ ngon, bé không cần được đánh thức đâu"
+    elif needs["hunger"] < 30:
+        updated["mood"] = "hơi đói rồi, nhưng vẫn ổn và đang chờ bữa ăn"
+    elif needs["energy"] < 35:
+        updated["mood"] = "đang thư giãn để lấy lại năng lượng"
+    elif needs["cleanliness"] < 45:
+        updated["mood"] = "muốn được chải chuốt một chút"
+    elif needs["happiness"] < 40:
+        updated["mood"] = "đang tò mò chờ hai bạn chơi cùng"
+    else:
+        updated["mood"] = "khỏe khoắn, tò mò và sẵn sàng chơi"
+    updated["activity"] = (
+        "sleeping" if updated["sleeping"] else
+        "playful" if needs["happiness"] >= 75 and needs["energy"] >= 45 else
+        "resting" if needs["energy"] < 45 else
+        "curious"
+    )
+    return updated
+
+
+def apply_shared_pet_action(
+    pet: dict,
+    action_name: str,
+    now: datetime.datetime,
+    timezone_offset_minutes: int,
+) -> dict:
+    updated = advance_shared_pet(pet, now, timezone_offset_minutes)
+    for need, change in PET_ACTIONS[action_name]["needs"].items():
+        updated[need] = round(max(0, min(100, updated[need] + change)), 1)
+    updated["last_action"] = action_name
+    updated["last_action_at"] = now
+    updated["last_updated"] = now
+    return advance_shared_pet(updated, now, timezone_offset_minutes)
+
+
+def present_shared_pet(
+    pet: dict | None,
+    now: datetime.datetime | None = None,
+    timezone_offset_minutes: int | None = None,
+) -> dict | None:
+    if not pet:
+        return None
+    pet = advance_shared_pet(
+        pet,
+        now or datetime.datetime.now(datetime.timezone.utc),
+        timezone_offset_minutes,
+    )
+    species = PET_SPECIES[pet["species"]]
+    experience = pet.get("experience", 0)
+    return {
+        "name": pet["name"],
+        "species": pet["species"],
+        "species_label": species["label"],
+        "emoji": species["emoji"],
+        "level": min(10, experience // 50 + 1),
+        "experience": experience,
+        "experience_in_level": experience % 50 if experience < 450 else 50,
+        "affection": pet.get("affection", 0),
+        "interactions": pet.get("interactions", 0),
+        "last_action": pet.get("last_action", ""),
+        "needs": {
+            "hunger": pet["hunger"],
+            "energy": pet["energy"],
+            "happiness": pet["happiness"],
+            "cleanliness": pet["cleanliness"],
+        },
+        "mood": pet["mood"],
+        "activity": pet["activity"],
+        "sleeping": pet["sleeping"],
+        "as_of": pet["last_updated"].isoformat(),
+        "created_by": pet["created_by"],
+        "created_at": pet["created_at"].isoformat(),
     }
 
 
@@ -801,12 +993,14 @@ async def require_world_room(other_username: str, username: str) -> str:
 async def get_private_world(
     other_username: str,
     username: Annotated[str, Depends(get_current_username)],
+    timezone_offset_minutes: int = Query(default=0, ge=-840, le=840),
 ):
     room = await require_world_room(other_username, username)
     try:
         message_count = await message_collection.count_documents({"room": room})
         memory_count = await world_memory_collection.count_documents({"room": room})
         game_count = await world_game_collection.count_documents({"room": room})
+        pet = await world_pet_collection.find_one({"room": room})
         cursor = (
             world_memory_collection.find({"room": room})
             .sort("created_at", -1)
@@ -829,7 +1023,174 @@ async def get_private_world(
         },
         "memories": memories,
         "memories_truncated": memory_count > len(memories),
+        "pet": present_shared_pet(pet, timezone_offset_minutes=timezone_offset_minutes),
     }
+
+
+@app.post("/api/world/{other_username}/pet", status_code=201)
+async def create_shared_pet(
+    other_username: str,
+    data: SharedPetCreateSchema,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    room = await require_world_room(other_username, username)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    pet = {
+        "room": room,
+        "name": data.name,
+        "species": data.species,
+        "created_by": username,
+        "created_at": now,
+        "experience": 0,
+        "affection": 0,
+        "interactions": 0,
+        "last_action": "",
+        "timezone_offset_minutes": data.timezone_offset_minutes,
+        **PET_NEED_DEFAULTS,
+        "last_updated": now,
+        "last_actions": {},
+    }
+    try:
+        await world_pet_collection.update_one(
+            {"room": room},
+            {"$setOnInsert": pet},
+            upsert=True,
+        )
+        pet = await world_pet_collection.find_one({"room": room})
+    except DuplicateKeyError:
+        try:
+            pet = await world_pet_collection.find_one({"room": room})
+        except PyMongoError as exc:
+            raise HTTPException(status_code=503, detail="Không thể tạo thú cưng chung.") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tạo thú cưng chung.") from exc
+    presented_pet = present_shared_pet(pet)
+    await manager.broadcast_to_room(room, {
+        "type": "shared_pet_update",
+        "room": room,
+        "pet": presented_pet,
+        "message": f"{pet['name']} vừa được nhận nuôi!",
+    })
+    return {"pet": presented_pet}
+
+
+@app.get("/api/world/{other_username}/pet")
+async def get_shared_pet(
+    other_username: str,
+    username: Annotated[str, Depends(get_current_username)],
+    timezone_offset_minutes: int = Query(default=0, ge=-840, le=840),
+):
+    room = await require_world_room(other_username, username)
+    try:
+        pet = await world_pet_collection.find_one({"room": room})
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải thú cưng chung.") from exc
+    return {
+        "pet": present_shared_pet(
+            pet,
+            timezone_offset_minutes=timezone_offset_minutes,
+        )
+    }
+
+
+@app.post("/api/world/{other_username}/pet/actions")
+async def interact_with_shared_pet(
+    other_username: str,
+    data: SharedPetActionSchema,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    room = await require_world_room(other_username, username)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    account_key = hashlib.sha256(username.encode("utf-8")).hexdigest()
+    cooldown_path = f"last_actions.{account_key}"
+    action = PET_ACTIONS[data.action]
+    try:
+        pet = None
+        for _ in range(5):
+            current_pet = await world_pet_collection.find_one({"room": room})
+            if not current_pet:
+                raise HTTPException(status_code=404, detail="Cuộc trò chuyện này chưa có thú cưng.")
+            timezone_offset_minutes = current_pet.get(
+                "timezone_offset_minutes",
+                data.timezone_offset_minutes,
+            )
+            evolved_pet = apply_shared_pet_action(
+                current_pet,
+                data.action,
+                now,
+                timezone_offset_minutes,
+            )
+            if evolved_pet["sleeping"] and data.action != "pet":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Bé đang ngủ ngon; hãy để bé nghỉ rồi quay lại sau nhé.",
+                )
+            last_updated_filter = (
+                {"last_updated": current_pet["last_updated"]}
+                if current_pet.get("last_updated") is not None
+                else {"last_updated": {"$exists": False}}
+            )
+            cooldown_before = now - datetime.timedelta(seconds=PET_ACTION_COOLDOWN_SECONDS)
+            pet = await world_pet_collection.find_one_and_update(
+                {
+                    "$and": [
+                        {"room": room, **last_updated_filter},
+                        {
+                            "$or": [
+                                {cooldown_path: {"$exists": False}},
+                                {cooldown_path: {"$lte": cooldown_before}},
+                            ]
+                        },
+                    ]
+                },
+                {
+                    "$set": {
+                        cooldown_path: now,
+                        "last_action": data.action,
+                        "last_action_at": now,
+                        "last_updated": now,
+                        "timezone_offset_minutes": timezone_offset_minutes,
+                        **{
+                            key: evolved_pet[key]
+                            for key in PET_NEED_DEFAULTS
+                        },
+                    },
+                    "$inc": {
+                        "experience": action["experience"],
+                        "affection": action["affection"],
+                        "interactions": 1,
+                    },
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+            if pet:
+                break
+            latest_pet = await world_pet_collection.find_one(
+                {"room": room},
+                {"_id": 0, cooldown_path: 1},
+            )
+            last_action_at = latest_pet.get("last_actions", {}).get(account_key) if latest_pet else None
+            if last_action_at:
+                if last_action_at.tzinfo is None:
+                    last_action_at = last_action_at.replace(tzinfo=datetime.timezone.utc)
+                if last_action_at > cooldown_before:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Bé cần nghỉ một chút trước khi chơi tiếp nhé.",
+                    )
+        if not pet:
+            raise HTTPException(status_code=409, detail="Bé vừa được chăm; vui lòng thử lại.")
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tương tác với thú cưng.") from exc
+    presented_pet = present_shared_pet(pet)
+    message = f"{pet['name']} {action['message']}!"
+    await manager.broadcast_to_room(room, {
+        "type": "shared_pet_update",
+        "room": room,
+        "pet": presented_pet,
+        "message": message,
+    })
+    return {"pet": presented_pet, "message": message}
 
 
 @app.post("/api/world/{other_username}/memories", status_code=201)

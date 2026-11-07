@@ -38,6 +38,7 @@ let groups = [];
 let pinnedRooms = [];
 let unreadCounts = {};
 let chatStateTimer = null;
+let sharedPetRefreshTimer = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let reconnectingRoom = "";
@@ -144,6 +145,10 @@ const worldMemories = document.getElementById("world-memories");
 const worldFeedback = document.getElementById("world-feedback");
 const worldSourcePreview = document.getElementById("world-source-preview");
 const worldSourceText = document.getElementById("world-source-text");
+const sharedPetCard = document.getElementById("shared-pet-card");
+const sharedPetCreateForm = document.getElementById("shared-pet-create-form");
+const sharedPetName = document.getElementById("shared-pet-name");
+const sharedPetSpecies = document.getElementById("shared-pet-species");
 const musicModal = document.getElementById("music-modal");
 const musicPlaylistElement = document.getElementById("music-playlist");
 const musicLinkForm = document.getElementById("music-link-form");
@@ -277,6 +282,7 @@ function signOut(reload = true) {
     if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
     if (musicOpenSource) musicOpenSource.classList.add("hidden");
     if (musicModal) musicModal.classList.add("hidden");
+    stopSharedPetRefresh();
     if (perspectiveModal) perspectiveModal.classList.add("hidden");
     if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
     perspectiveRefreshTimer = null;
@@ -616,6 +622,7 @@ async function switchGroupChat(group) {
     perspectiveTopics = [];
     selectedPerspectiveTopicId = "";
     if (worldModal) worldModal.classList.add("hidden");
+    stopSharedPetRefresh();
     clearMemorySource();
     if (socket) {
         const oldSocket = socket;
@@ -1168,6 +1175,7 @@ async function switchPrivateChat(targetUser, avatar) {
     if (perspectiveRefreshTimer) clearInterval(perspectiveRefreshTimer);
     perspectiveRefreshTimer = null;
     if (worldModal) worldModal.classList.add("hidden");
+    stopSharedPetRefresh();
     clearMemorySource();
     if (socket) {
         const oldSocket = socket;
@@ -1260,6 +1268,14 @@ function connectWebSocket(room, username) {
 
         if (data.type === "presence") {
             setPresence(data.username, data.online);
+        } else if (data.type === "shared_pet_update") {
+            if (data.room === currentRoom && worldModal && !worldModal.classList.contains("hidden")) {
+                renderSharedPet(data.pet);
+                if (worldFeedback) {
+                    worldFeedback.textContent = data.message || "";
+                    worldFeedback.classList.remove("error");
+                }
+            }
         } else if (data.type === "edit_message") {
             const message = document.getElementById(`msg-${data._id}`);
             const body = message?.querySelector(".content > span");
@@ -1852,6 +1868,7 @@ async function refreshPerspectiveTopics() {
 
 async function openWorld(message = null) {
     if (!currentTargetUser) return;
+    stopSharedPetRefresh();
     if (worldMemoryForm) worldMemoryForm.reset();
     if (worldFeedback) {
         worldFeedback.textContent = "";
@@ -1865,6 +1882,8 @@ async function openWorld(message = null) {
     }
     if (worldModal) worldModal.classList.remove("hidden");
     await refreshWorld();
+    stopSharedPetRefresh();
+    sharedPetRefreshTimer = window.setInterval(refreshSharedPet, 60000);
 }
 
 async function refreshWorld() {
@@ -1873,7 +1892,10 @@ async function refreshWorld() {
     worldFeedback.textContent = "Đang tải thế giới...";
     worldFeedback.classList.remove("error");
     try {
-        const data = await apiFetch(`/world/${encodeURIComponent(targetUser)}`);
+        const timezoneOffset = new Date().getTimezoneOffset();
+        const data = await apiFetch(
+            `/world/${encodeURIComponent(targetUser)}?timezone_offset_minutes=${timezoneOffset}`,
+        );
         if (targetUser !== currentTargetUser) return;
         document.getElementById("world-title").textContent = `${currentUsername} & ${targetUser}`;
         document.getElementById("world-landmark").textContent = data.world.landmark;
@@ -1891,6 +1913,7 @@ async function refreshWorld() {
         document.getElementById("world-message-count").textContent = data.stats.messages;
         document.getElementById("world-game-count").textContent = data.stats.games;
         document.getElementById("world-memory-count").textContent = data.stats.memories;
+        renderSharedPet(data.pet);
         renderWorldMemories(data.memories, data.memories_truncated);
         worldFeedback.textContent = "";
     } catch (error) {
@@ -1898,6 +1921,210 @@ async function refreshWorld() {
         worldFeedback.textContent = error.message || "Không thể tải thế giới chung.";
         worldFeedback.classList.add("error");
     }
+}
+
+function stopSharedPetRefresh() {
+    if (sharedPetRefreshTimer) window.clearInterval(sharedPetRefreshTimer);
+    sharedPetRefreshTimer = null;
+}
+
+async function refreshSharedPet() {
+    const targetUser = currentTargetUser;
+    if (!targetUser || !worldModal || worldModal.classList.contains("hidden")) return;
+    try {
+        const timezoneOffset = new Date().getTimezoneOffset();
+        const data = await apiFetch(
+            `/world/${encodeURIComponent(targetUser)}/pet?timezone_offset_minutes=${timezoneOffset}`,
+        );
+        if (targetUser === currentTargetUser) renderSharedPet(data.pet);
+    } catch (error) {
+        console.error("Không thể cập nhật nhu cầu của thú cưng:", error);
+    }
+}
+
+function renderSharedPet(pet) {
+    if (!sharedPetCard || !sharedPetCreateForm) return;
+    sharedPetCard.replaceChildren();
+    sharedPetCreateForm.classList.toggle("hidden", Boolean(pet));
+
+    if (!pet) {
+        const empty = document.createElement("p");
+        empty.className = "shared-pet-empty";
+        empty.textContent = "Chưa có bé nào ở đây. Hai bạn cùng nhận nuôi một sinh vật nhỏ nhé!";
+        sharedPetCard.append(empty);
+        return;
+    }
+
+    const hero = document.createElement("div");
+    hero.className = "shared-pet-hero";
+    const stage = document.createElement("div");
+    stage.className = `shared-pet-stage ${pet.activity || "curious"}`;
+    stage.setAttribute("role", "img");
+    stage.setAttribute("aria-label", `${pet.name} ${pet.activity === "sleeping" ? "đang ngủ" : "đang hoạt động"}`);
+    const avatar = document.createElement("span");
+    avatar.className = "shared-pet-avatar";
+    avatar.textContent = pet.emoji;
+    avatar.setAttribute("aria-hidden", "true");
+    stage.append(avatar);
+    const details = document.createElement("div");
+    details.className = "shared-pet-details";
+    const name = document.createElement("h4");
+    name.textContent = pet.name;
+    const species = document.createElement("p");
+    const activityLabels = {
+        sleeping: "đang ngủ",
+        playful: "tỉnh táo và muốn chơi",
+        resting: "đang nghỉ ngơi",
+        curious: "đang tò mò khám phá",
+    };
+    species.textContent = `${pet.species_label} · Cấp ${pet.level} · ${activityLabels[pet.activity] || activityLabels.curious}`;
+    details.append(name, species);
+    hero.append(stage, details);
+
+    const progressTrack = document.createElement("div");
+    progressTrack.className = "shared-pet-progress";
+    progressTrack.setAttribute("role", "progressbar");
+    progressTrack.setAttribute("aria-label", `Kinh nghiệm của ${pet.name}`);
+    progressTrack.setAttribute("aria-valuenow", String(pet.experience_in_level));
+    progressTrack.setAttribute("aria-valuemin", "0");
+    progressTrack.setAttribute("aria-valuemax", "50");
+    const progressFill = document.createElement("span");
+    progressFill.style.width = `${pet.experience_in_level * 2}%`;
+    progressTrack.append(progressFill);
+
+    const stats = document.createElement("p");
+    stats.className = "shared-pet-stats";
+    stats.textContent = `💚 Thân thiết ${pet.affection} · ✨ ${pet.experience} kinh nghiệm · 🤝 ${pet.interactions} lần cùng chăm`;
+
+    const needs = document.createElement("div");
+    needs.className = "shared-pet-needs";
+    const needLabels = [
+        ["hunger", "🍲 No bụng"],
+        ["energy", "⚡ Năng lượng"],
+        ["happiness", "😊 Vui vẻ"],
+        ["cleanliness", "🫧 Sạch sẽ"],
+    ];
+    for (const [key, label] of needLabels) {
+        const row = document.createElement("div");
+        row.className = "shared-pet-need";
+        const heading = document.createElement("div");
+        heading.className = "shared-pet-need-heading";
+        const title = document.createElement("span");
+        title.textContent = label;
+        const value = Math.max(0, Math.min(100, Number(pet.needs?.[key] ?? 0)));
+        const percentage = document.createElement("span");
+        percentage.textContent = `${Math.round(value)}%`;
+        heading.append(title, percentage);
+        const track = document.createElement("div");
+        track.className = "shared-pet-need-track";
+        track.setAttribute("role", "progressbar");
+        track.setAttribute("aria-label", label);
+        track.setAttribute("aria-valuenow", String(Math.round(value)));
+        track.setAttribute("aria-valuemin", "0");
+        track.setAttribute("aria-valuemax", "100");
+        const fill = document.createElement("span");
+        fill.style.width = `${value}%`;
+        if (value < 30) fill.classList.add("low");
+        track.append(fill);
+        row.append(heading, track);
+        needs.append(row);
+    }
+
+    const mood = document.createElement("p");
+    mood.className = "shared-pet-mood";
+    mood.textContent = pet.mood || `${pet.name} đang tò mò khám phá.`;
+
+    const actions = document.createElement("div");
+    actions.className = "shared-pet-actions";
+    for (const [action, label] of [
+        ["feed", "🍓 Cho ăn"],
+        ["play", "🎾 Chơi"],
+        ["pet", "🫳 Vuốt ve"],
+        ["groom", "🪮 Chải lông"],
+    ]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "shared-pet-action";
+        button.dataset.petAction = action;
+        button.textContent = label;
+        if (pet.sleeping && action !== "pet") {
+            button.disabled = true;
+            button.title = "Bé đang ngủ; để bé nghỉ nhé.";
+        }
+        actions.append(button);
+    }
+    sharedPetCard.append(hero, progressTrack, needs, stats, mood, actions);
+}
+
+async function interactWithSharedPet(action) {
+    const targetUser = currentTargetUser;
+    if (!targetUser) return;
+    const actionButtons = sharedPetCard?.querySelectorAll("[data-pet-action]");
+    actionButtons?.forEach((button) => { button.disabled = true; });
+    if (worldFeedback) {
+        worldFeedback.textContent = "Đang chăm bé...";
+        worldFeedback.classList.remove("error");
+    }
+    try {
+        const result = await apiFetch(`/world/${encodeURIComponent(targetUser)}/pet/actions`, {
+            method: "POST",
+            body: JSON.stringify({
+                action,
+                timezone_offset_minutes: new Date().getTimezoneOffset(),
+            }),
+        });
+        if (targetUser !== currentTargetUser) return;
+        renderSharedPet(result.pet);
+        if (worldFeedback) worldFeedback.textContent = result.message;
+    } catch (error) {
+        if (targetUser !== currentTargetUser) return;
+        if (worldFeedback) {
+            worldFeedback.textContent = error.message || "Không thể chăm thú cưng lúc này.";
+            worldFeedback.classList.add("error");
+        }
+        actionButtons?.forEach((button) => { button.disabled = false; });
+    }
+}
+
+if (sharedPetCard) {
+    sharedPetCard.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-pet-action]");
+        if (button && sharedPetCard.contains(button)) interactWithSharedPet(button.dataset.petAction);
+    });
+}
+
+if (sharedPetCreateForm) {
+    sharedPetCreateForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const targetUser = currentTargetUser;
+        if (!targetUser) return;
+        const createButton = document.getElementById("shared-pet-create-btn");
+        createButton.disabled = true;
+        if (worldFeedback) {
+            worldFeedback.textContent = "Đang chuẩn bị chỗ ở cho bé...";
+            worldFeedback.classList.remove("error");
+        }
+        try {
+            const result = await apiFetch(`/world/${encodeURIComponent(targetUser)}/pet`, {
+                method: "POST",
+                body: JSON.stringify({
+                    name: sharedPetName.value.trim(),
+                    species: sharedPetSpecies.value,
+                    timezone_offset_minutes: new Date().getTimezoneOffset(),
+                }),
+            });
+            if (targetUser !== currentTargetUser) return;
+            renderSharedPet(result.pet);
+            if (worldFeedback) worldFeedback.textContent = `Chào mừng ${result.pet.name} đến với hai bạn!`;
+        } catch (error) {
+            if (targetUser === currentTargetUser && worldFeedback) {
+                worldFeedback.textContent = error.message || "Không thể nhận nuôi thú cưng.";
+                worldFeedback.classList.add("error");
+            }
+        } finally {
+            createButton.disabled = false;
+        }
+    });
 }
 
 function renderWorldMemories(memories, truncated) {
@@ -2023,11 +2250,15 @@ const worldCloseBtn = document.getElementById("world-close-btn");
 if (worldCloseBtn) {
     worldCloseBtn.addEventListener("click", () => {
         if (worldModal) worldModal.classList.add("hidden");
+        stopSharedPetRefresh();
     });
 }
 if (worldModal) {
     worldModal.addEventListener("click", (event) => {
-        if (event.target === worldModal) worldModal.classList.add("hidden");
+        if (event.target === worldModal) {
+            worldModal.classList.add("hidden");
+            stopSharedPetRefresh();
+        }
     });
 }
 const clearSourceBtn = document.getElementById("world-clear-source-btn");

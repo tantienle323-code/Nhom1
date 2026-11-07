@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261107-chat-upgrades">
+    <link rel="stylesheet" href="style.css?v=20261107-pet-motion">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
@@ -76,7 +76,7 @@
                 </div>
                 <div class="header-actions">
                     <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" disabled>📹 Gọi</button>
-                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
+                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Mở thế giới chung và thú cưng" disabled>🐾 Thú cưng chung</button>
                     <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" disabled>🪞 Đổi góc nhìn</button>
                     <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
                     <a class="tg-admin-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game</a>
@@ -183,6 +183,26 @@
                     <p id="world-description" class="world-description"></p>
                 </div>
             </div>
+            <section class="shared-pet-section" aria-labelledby="shared-pet-heading">
+                <div class="world-section-heading">
+                    <div><p class="world-eyebrow">BÉ CỦA CẢ HAI</p><h3 id="shared-pet-heading">Thú cưng chung</h3></div>
+                    <span>Nhu cầu thay đổi nhẹ nhàng; bé luôn an toàn khi hai bạn vắng mặt</span>
+                </div>
+                <div id="shared-pet-card" class="shared-pet-card" aria-live="polite"></div>
+                <form id="shared-pet-create-form" class="shared-pet-create-form hidden">
+                    <label for="shared-pet-name">Đặt tên cho bé</label>
+                    <input id="shared-pet-name" type="text" maxlength="24" placeholder="Ví dụ: Bánh Bao" required>
+                    <label for="shared-pet-species">Chọn loài</label>
+                    <select id="shared-pet-species">
+                        <option value="cat">🐱 Mèo</option>
+                        <option value="dog">🐶 Cún</option>
+                        <option value="rabbit">🐰 Thỏ</option>
+                        <option value="dragon">🐲 Rồng</option>
+                        <option value="capybara">🐹 Capybara</option>
+                    </select>
+                    <button id="shared-pet-create-btn" class="btn-telegram" type="submit">✨ Nhận nuôi cùng nhau</button>
+                </form>
+            </section>
             <div class="world-level-row">
                 <span id="world-stage-name"></span>
                 <span id="world-stage-level"></span>
@@ -379,6 +399,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js?v=20261107-chat-upgrades"></script>
+    <script src="app.js?v=20261107-pet-motion"></script>
 </body>
 </html>

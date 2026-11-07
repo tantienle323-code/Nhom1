@@ -274,6 +274,229 @@ class PrivateWorldTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory.title, "First memory")
         self.assertEqual(memory.note, "A note")
 
+    async def test_shared_pet_schema_normalizes_name_and_rejects_unknown_species(self):
+        pet = main.SharedPetCreateSchema(name="  Bánh Bao  ", species="rabbit")
+        self.assertEqual(pet.name, "Bánh Bao")
+        self.assertEqual(pet.species, "rabbit")
+        self.assertEqual(pet.timezone_offset_minutes, 0)
+        with self.assertRaises(ValidationError):
+            main.SharedPetCreateSchema(name="   ", species="cat")
+        with self.assertRaises(ValidationError):
+            main.SharedPetCreateSchema(name="Miu", species="unicorn")
+        with self.assertRaises(ValidationError):
+            main.SharedPetCreateSchema(
+                name="Miu",
+                species="cat",
+                timezone_offset_minutes=1000,
+            )
+        self.assertEqual(main.SharedPetActionSchema(action="groom").action, "groom")
+
+    async def test_shared_pet_progress_is_persistent_and_does_not_decay(self):
+        created_at = main.datetime.datetime.now(main.datetime.timezone.utc)
+        pet = {
+            "name": "Bánh Bao",
+            "species": "cat",
+            "created_by": "alice",
+            "created_at": created_at,
+            "experience": 55,
+            "affection": 4,
+            "interactions": 4,
+        }
+
+        presented = main.present_shared_pet(pet)
+
+        self.assertEqual(presented["level"], 2)
+        self.assertEqual(presented["experience_in_level"], 5)
+        self.assertEqual(presented["affection"], 4)
+        self.assertEqual(presented["emoji"], "🐱")
+        self.assertIn("hunger", presented["needs"])
+
+    async def test_shared_pet_needs_evolve_gently_and_nighttime_rest_restores_energy(self):
+        start = main.datetime.datetime(2026, 11, 7, 8, tzinfo=main.datetime.timezone.utc)
+        pet = {
+            "name": "Bánh Bao",
+            "species": "cat",
+            "created_by": "alice",
+            "created_at": start,
+            "last_updated": start,
+        }
+
+        awake = main.advance_shared_pet(pet, start + main.datetime.timedelta(hours=8))
+        night_start = start.replace(hour=22)
+        pet["last_updated"] = night_start
+        asleep = main.advance_shared_pet(
+            pet,
+            night_start + main.datetime.timedelta(hours=8),
+        )
+
+        self.assertAlmostEqual(awake["hunger"], 77.8)
+        self.assertAlmostEqual(awake["energy"], 67.2)
+        self.assertAlmostEqual(awake["happiness"], 71.4)
+        self.assertAlmostEqual(asleep["energy"], 100)
+        self.assertTrue(asleep["sleeping"])
+        self.assertGreater(asleep["hunger"], 70)
+
+    async def test_shared_pet_sleep_schedule_uses_adopting_browser_timezone(self):
+        utc_now = main.datetime.datetime(2026, 11, 7, 15, tzinfo=main.datetime.timezone.utc)
+        pet = {
+            "name": "Mochi",
+            "species": "rabbit",
+            "created_by": "alice",
+            "created_at": utc_now,
+        }
+
+        presented = main.present_shared_pet(pet, utc_now, timezone_offset_minutes=-420)
+
+        self.assertTrue(presented["sleeping"])
+        self.assertEqual(presented["activity"], "sleeping")
+
+    async def test_shared_pet_care_actions_restore_the_matching_need(self):
+        now = main.datetime.datetime(2026, 11, 7, 12, tzinfo=main.datetime.timezone.utc)
+        pet = {
+            "hunger": 40,
+            "energy": 60,
+            "happiness": 50,
+            "cleanliness": 30,
+            "created_at": now,
+            "last_updated": now,
+        }
+
+        fed = main.apply_shared_pet_action(pet, "feed", now, 0)
+        groomed = main.apply_shared_pet_action(pet, "groom", now, 0)
+
+        self.assertEqual(fed["hunger"], 85)
+        self.assertEqual(groomed["cleanliness"], 65)
+
+    async def test_shared_pet_is_created_once_for_a_private_room(self):
+        created = {}
+
+        class Pets:
+            async def update_one(self, query, update, upsert):
+                self.asserted = (query, update, upsert)
+                created.update(update["$setOnInsert"])
+
+            async def find_one(self, query):
+                return created
+
+        with (
+            patch.object(main, "require_world_room", new=AsyncMock(return_value="chat_alice_bob")),
+            patch.object(main, "world_pet_collection", Pets()),
+            patch.object(main, "manager", type(
+                "Manager", (), {"broadcast_to_room": AsyncMock()}
+            )()),
+        ):
+            result = await main.create_shared_pet(
+                "bob",
+                main.SharedPetCreateSchema(name="Mochi", species="rabbit"),
+                "alice",
+            )
+
+        self.assertEqual(result["pet"]["name"], "Mochi")
+        self.assertEqual(created["room"], "chat_alice_bob")
+        self.assertEqual(created["experience"], 0)
+
+    async def test_shared_pet_action_updates_shared_progress_and_enforces_cooldown(self):
+        updated = {
+            "name": "Mochi",
+            "species": "rabbit",
+            "created_by": "alice",
+            "created_at": main.datetime.datetime.now(main.datetime.timezone.utc),
+            "last_updated": main.datetime.datetime.now(main.datetime.timezone.utc),
+            "experience": 8,
+            "affection": 1,
+            "interactions": 1,
+            "last_action": "play",
+            "hunger": 80,
+            "energy": 60,
+            "happiness": 75,
+            "cleanliness": 90,
+        }
+        calls = 0
+        read_calls = 0
+        now = main.datetime.datetime.now(main.datetime.timezone.utc)
+        account_key = main.hashlib.sha256(b"alice").hexdigest()
+
+        class Pets:
+            async def find_one_and_update(self, query, update, return_document):
+                nonlocal calls
+                calls += 1
+                self.query = query
+                self.update = update
+                return updated if calls == 1 else None
+
+            async def find_one(self, query, projection=None):
+                nonlocal read_calls
+                read_calls += 1
+                if read_calls == 1:
+                    return {
+                        "room": "chat_alice_bob",
+                        "created_at": now - main.datetime.timedelta(hours=1),
+                        "last_updated": now - main.datetime.timedelta(hours=1),
+                        "hunger": 80,
+                        "energy": 60,
+                        "happiness": 75,
+                        "cleanliness": 90,
+                    }
+                return {"last_actions": {account_key: now}}
+
+        with (
+            patch.object(main, "require_world_room", new=AsyncMock(return_value="chat_alice_bob")),
+            patch.object(main, "world_pet_collection", Pets()),
+            patch.object(main, "manager", type(
+                "Manager", (), {"broadcast_to_room": AsyncMock()}
+            )()),
+        ):
+            pets = main.world_pet_collection
+            result = await main.interact_with_shared_pet(
+                "bob", main.SharedPetActionSchema(action="play"), "alice"
+            )
+            with self.assertRaises(HTTPException) as cooldown:
+                await main.interact_with_shared_pet(
+                    "bob", main.SharedPetActionSchema(action="feed"), "alice"
+                )
+
+        self.assertEqual(result["pet"]["experience"], 8)
+        self.assertEqual(result["pet"]["affection"], 1)
+        self.assertEqual(cooldown.exception.status_code, 429)
+        cooldown_filters = pets.query["$and"][1]["$or"]
+        self.assertTrue(any(
+            "last_actions." in key
+            for condition in cooldown_filters
+            for key in condition
+        ))
+
+    async def test_shared_pet_cannot_be_woken_for_play_or_feeding(self):
+        now = main.datetime.datetime.now(main.datetime.timezone.utc)
+
+        class Pets:
+            async def find_one(self, query, projection=None):
+                return {
+                    "room": "chat_alice_bob",
+                    "created_at": now,
+                    "last_updated": now,
+                    "timezone_offset_minutes": -480,
+                    "hunger": 80,
+                    "energy": 90,
+                    "happiness": 80,
+                    "cleanliness": 90,
+                }
+
+            async def find_one_and_update(self, query, update, return_document):
+                raise AssertionError("A sleeping pet must not be updated by disruptive actions.")
+
+        with (
+            patch.object(main, "require_world_room", new=AsyncMock(return_value="chat_alice_bob")),
+            patch.object(main, "world_pet_collection", Pets()),
+        ):
+            with self.assertRaises(HTTPException) as sleeping:
+                await main.interact_with_shared_pet(
+                    "bob",
+                    main.SharedPetActionSchema(action="play"),
+                    "alice",
+                )
+
+        self.assertEqual(sleeping.exception.status_code, 409)
+
     async def test_completed_game_is_recorded_once_for_the_pair(self):
         class Games:
             def __init__(self):

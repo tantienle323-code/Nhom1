@@ -205,6 +205,79 @@ input:focus { border-color: #5288c1; }
 .world-eyebrow { color: #8fc9a8; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 .world-hero h2 { margin: 5px 0; font-size: 26px; }
 .world-description { color: #a3b4b2; font-size: 13px; line-height: 1.5; }
+.shared-pet-section { margin: 0 0 22px; padding: 16px; border: 1px solid rgba(147,204,165,.23); border-radius: 16px; background: linear-gradient(145deg, rgba(38,76,59,.55), rgba(19,34,32,.65)); }
+.shared-pet-card { display: grid; gap: 12px; }
+.shared-pet-empty { color: #a9bbb0; font-size: 12px; line-height: 1.6; }
+.shared-pet-hero { display: flex; align-items: center; gap: 15px; }
+.shared-pet-stage { position: relative; flex: 0 0 184px; height: 96px; overflow: hidden; border: 1px solid rgba(167,230,193,.22); border-radius: 18px; background: radial-gradient(ellipse at 75% 15%, rgba(245,222,142,.15), transparent 35%), linear-gradient(180deg, #27473b 0%, #1c3b32 72%, #254635 73%, #254635 100%); }
+.shared-pet-stage::before { position: absolute; top: 10px; right: 15px; color: #d7edb4; content: "✦"; font-size: 13px; animation: shared-pet-sparkle 2.7s ease-in-out infinite; }
+.shared-pet-stage::after { position: absolute; right: 9px; bottom: 11px; left: 9px; height: 5px; border-radius: 50%; background: rgba(7,19,14,.32); content: ""; }
+.shared-pet-avatar { position: absolute; z-index: 1; bottom: 11px; left: 12px; display: grid; width: 52px; height: 58px; place-items: center; font-size: 43px; line-height: 1; will-change: transform; animation: shared-pet-walk 5s ease-in-out infinite; }
+.shared-pet-stage.playful .shared-pet-avatar { animation-name: shared-pet-play; animation-duration: 1.65s; animation-timing-function: ease-in-out; }
+.shared-pet-stage.resting .shared-pet-avatar { left: calc(50% - 26px); animation-name: shared-pet-rest; animation-duration: 4.5s; }
+.shared-pet-stage.sleeping .shared-pet-avatar { left: calc(50% - 26px); animation-name: shared-pet-sleep; animation-duration: 2.2s; }
+.shared-pet-stage.sleeping::before { top: 9px; right: 23px; content: "Zzz"; font-size: 12px; font-weight: 800; animation-name: shared-pet-dream; }
+.shared-pet-details h4 { color: #e8f6e8; font-size: 18px; }
+.shared-pet-details p, .shared-pet-stats { color: #9fb6a8; font-size: 11px; }
+.shared-pet-progress { height: 7px; overflow: hidden; border-radius: 999px; background: #263d32; }
+.shared-pet-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #72c890, #dddb85); transition: width .3s ease; }
+.shared-pet-needs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 14px; }
+.shared-pet-need { display: grid; gap: 5px; }
+.shared-pet-need-heading { display: flex; justify-content: space-between; gap: 8px; color: #b7c8bb; font-size: 10px; }
+.shared-pet-need-track { height: 6px; overflow: hidden; border-radius: 999px; background: #263d32; }
+.shared-pet-need-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #d6b86e, #80cc91); transition: width .4s ease; }
+.shared-pet-need-track span.low { background: linear-gradient(90deg, #c9856e, #dfc06e); }
+.shared-pet-mood { color: #d6eccb; font-size: 12px; }
+.shared-pet-mood::before { margin-right: 5px; content: "💬"; }
+.shared-pet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.shared-pet-action { padding: 8px 11px; border: 1px solid rgba(147,204,165,.25); border-radius: 10px; background: rgba(103,161,118,.13); color: #d2e8d1; cursor: pointer; font-size: 11px; }
+.shared-pet-action:hover:not(:disabled) { background: rgba(103,161,118,.28); }
+.shared-pet-action:disabled { cursor: wait; opacity: .55; }
+.shared-pet-create-form { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; margin-top: 12px; }
+.shared-pet-create-form label { align-self: end; color: #c4d7c8; font-size: 11px; font-weight: 650; }
+.shared-pet-create-form input, .shared-pet-create-form select { width: 100%; min-width: 0; padding: 10px 11px; border: 1px solid #375144; border-radius: 9px; background: #172824; color: #edf5ef; font: inherit; font-size: 12px; }
+.shared-pet-create-form .btn-telegram { grid-column: 1 / -1; justify-self: end; padding: 10px 14px; background: #34775a; }
+.shared-pet-create-form .btn-telegram:disabled { cursor: wait; opacity: .6; }
+@keyframes shared-pet-walk {
+    0%, 100% { transform: translateX(0) translateY(0) rotate(-7deg); }
+    22% { transform: translateX(22px) translateY(-7px) rotate(4deg); }
+    48% { transform: translateX(84px) translateY(0) rotate(8deg); }
+    73% { transform: translateX(52px) translateY(-5px) rotate(-4deg); }
+}
+@keyframes shared-pet-walk-mobile {
+    0%, 100% { transform: translateX(0) translateY(0) rotate(-7deg); }
+    22% { transform: translateX(10px) translateY(-7px) rotate(4deg); }
+    48% { transform: translateX(46px) translateY(0) rotate(8deg); }
+    73% { transform: translateX(28px) translateY(-5px) rotate(-4deg); }
+}
+@keyframes shared-pet-play {
+    0%, 100% { transform: translateX(0) translateY(0) rotate(-8deg) scale(1); }
+    25% { transform: translateX(24px) translateY(-17px) rotate(8deg) scale(1.05); }
+    50% { transform: translateX(84px) translateY(0) rotate(-5deg) scale(1); }
+    75% { transform: translateX(44px) translateY(-13px) rotate(7deg) scale(1.04); }
+}
+@keyframes shared-pet-play-mobile {
+    0%, 100% { transform: translateX(0) translateY(0) rotate(-8deg) scale(1); }
+    25% { transform: translateX(12px) translateY(-17px) rotate(8deg) scale(1.05); }
+    50% { transform: translateX(46px) translateY(0) rotate(-5deg) scale(1); }
+    75% { transform: translateX(25px) translateY(-13px) rotate(7deg) scale(1.04); }
+}
+@keyframes shared-pet-rest {
+    0%, 100% { transform: translateY(0) rotate(-4deg) scale(1); }
+    50% { transform: translateY(2px) rotate(4deg) scale(1.06, .96); }
+}
+@keyframes shared-pet-sleep {
+    0%, 100% { transform: translateY(2px) rotate(-4deg) scale(1, .92); }
+    50% { transform: translateY(-1px) rotate(4deg) scale(1.12, 1.04); }
+}
+@keyframes shared-pet-dream {
+    0%, 100% { transform: translateY(5px) scale(.8); opacity: .25; }
+    50% { transform: translateY(-5px) scale(1.1); opacity: 1; }
+}
+@keyframes shared-pet-sparkle {
+    0%, 100% { transform: scale(.7) rotate(0); opacity: .4; }
+    50% { transform: scale(1.25) rotate(35deg); opacity: 1; }
+}
 .world-level-row { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 8px; color: #d7e5df; font-size: 13px; font-weight: 700; }
 .world-level-row span:last-child { color: #86c3a0; }
 .world-progress-track { height: 9px; overflow: hidden; border-radius: 999px; background: #253832; }
@@ -358,7 +431,7 @@ input:focus { border-color: #5288c1; }
     .tg-call-button { width: 36px; height: 34px; padding: 0; overflow: hidden; font-size: 0; }
     .tg-call-button::before { content: "📹"; font-size: 16px; }
     .tg-world-button { width: 34px; height: 34px; padding: 0; overflow: hidden; font-size: 0; }
-    .tg-world-button::before { content: "🌱"; font-size: 17px; }
+    .tg-world-button::before { content: "🐾"; font-size: 17px; }
     .tg-perspective-button { width: 34px; height: 34px; padding: 0; overflow: hidden; font-size: 0; }
     .tg-perspective-button::before { content: "🪞"; font-size: 16px; }
     .tg-music-button { width: 34px; height: 34px; padding: 0; overflow: hidden; font-size: 0; }
@@ -381,6 +454,13 @@ input:focus { border-color: #5288c1; }
     .world-hero { gap: 13px; }
     .world-landmark { flex-basis: 76px; height: 76px; border-radius: 24px; font-size: 40px; }
     .world-hero h2 { font-size: 21px; }
+    .shared-pet-create-form { grid-template-columns: 1fr; }
+    .shared-pet-create-form .btn-telegram { grid-column: auto; justify-self: stretch; }
+    .shared-pet-needs { grid-template-columns: 1fr; }
+    .shared-pet-stage { flex-basis: 124px; }
+    .shared-pet-stage.curious .shared-pet-avatar { animation-name: shared-pet-walk-mobile; }
+    .shared-pet-stage.playful .shared-pet-avatar { animation-name: shared-pet-play-mobile; }
+    .shared-pet-stage.resting .shared-pet-avatar, .shared-pet-stage.sleeping .shared-pet-avatar { left: calc(50% - 26px); }
 }
 
 /* Professional chat theme */
@@ -788,5 +868,5 @@ input:focus, textarea:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .welcome-visual { animation: none; }
+    .welcome-visual, .shared-pet-avatar, .shared-pet-stage::before { animation: none; }
 }
