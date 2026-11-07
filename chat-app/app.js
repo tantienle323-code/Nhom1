@@ -56,6 +56,8 @@ const chatScreen = document.getElementById("chat-screen");
 const authForm = document.getElementById("auth-form");
 const usernameInput = document.getElementById("username-input");
 const passwordInput = document.getElementById("password-input");
+const phoneInput = document.getElementById("phone-input");
+const authPhoneField = document.querySelector(".auth-phone-field");
 const confirmPasswordInput = document.getElementById("confirm-password-input");
 const tabLoginBtn = document.getElementById("tab-login-btn");
 const tabRegisterBtn = document.getElementById("tab-register-btn");
@@ -63,10 +65,23 @@ const authSubmitBtn = document.getElementById("auth-submit-btn");
 const authPanelTitle = document.getElementById("auth-panel-title");
 const authPanelDescription = document.getElementById("auth-panel-description");
 const logoutBtn = document.getElementById("logout-btn");
+const appRailAvatar = document.getElementById("app-rail-avatar");
+const appRailAvatarButton = document.getElementById("app-rail-avatar-button");
 const headerName = document.getElementById("header-name");
 const headerAvatar = document.getElementById("header-avatar");
 const headerStatus = document.getElementById("header-status");
 const videoCallButton = document.getElementById("video-call-btn");
+const conversationInfoButton = document.getElementById("conversation-info-btn");
+const conversationInfoModal = document.getElementById("conversation-info-modal");
+const conversationInfoTitle = document.getElementById("conversation-info-title");
+const conversationInfoName = document.getElementById("conversation-info-name");
+const conversationInfoAvatar = document.getElementById("conversation-info-avatar");
+const conversationInfoStatus = document.getElementById("conversation-info-status");
+const conversationInfoCloseButton = document.getElementById("conversation-info-close-btn");
+const sharedImagesList = document.getElementById("shared-images-list");
+const sharedLinksList = document.getElementById("shared-links-list");
+const sharedMembersList = document.getElementById("shared-members-list");
+const sharedMembersTab = document.getElementById("shared-members-tab");
 const callOverlay = document.getElementById("call-overlay");
 const callTitle = document.getElementById("call-title");
 const callStatus = document.getElementById("call-status");
@@ -82,6 +97,15 @@ const callCameraButton = document.getElementById("call-camera-btn");
 const callScreenButton = document.getElementById("call-screen-btn");
 const callHangupButton = document.getElementById("call-hangup-btn");
 const messagesContainer = document.getElementById("messages-container");
+if (messagesContainer) {
+    messagesContainer.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest(".msg-more-button, .msg-actions")) return;
+        messagesContainer.querySelectorAll(".msg-actions:not(.hidden)").forEach((menu) => {
+            menu.classList.add("hidden");
+            menu.parentElement?.querySelector(".msg-more-button")?.setAttribute("aria-expanded", "false");
+        });
+    });
+}
 const messageInput = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
 const emojiPickerButton = document.getElementById("emoji-picker-btn");
@@ -128,7 +152,22 @@ const chatLayout = document.getElementById("chat-screen");
 const profileModal = document.getElementById("profile-modal");
 const profileUsername = document.getElementById("profile-username");
 const profileAvatarInput = document.getElementById("profile-avatar-input");
+const profileAvatarFile = document.getElementById("profile-avatar-file");
+const profileAvatarPreview = document.getElementById("profile-avatar-preview");
+const profileAvatarFileName = document.getElementById("profile-avatar-file-name");
 const profileBioInput = document.getElementById("profile-bio-input");
+const profilePhoneInput = document.getElementById("profile-phone-input");
+const contactsModal = document.getElementById("contacts-modal");
+const friendSearchForm = document.getElementById("friend-search-form");
+const friendPhoneSearch = document.getElementById("friend-phone-search");
+const friendSearchStatus = document.getElementById("friend-search-status");
+const friendSearchResult = document.getElementById("friend-search-result");
+const friendRequestsList = document.getElementById("friend-requests-list");
+const friendsList = document.getElementById("friends-list");
+const contactsDirectoryTab = document.getElementById("contacts-directory-tab");
+const contactsSearchTab = document.getElementById("contacts-search-tab");
+const friendsDirectoryView = document.getElementById("friends-directory-view");
+const friendsSearchView = document.getElementById("friends-search-view");
 const worldOpenButton = document.getElementById("world-open-btn");
 const worldModal = document.getElementById("world-modal");
 const perspectiveOpenButton = document.getElementById("perspective-open-btn");
@@ -173,6 +212,14 @@ const musicInviteBanner = document.getElementById("music-invite-banner");
 const musicInviteDescription = document.getElementById("music-invite-description");
 const musicInviteAcceptButton = document.getElementById("music-invite-accept");
 const musicInviteDeclineButton = document.getElementById("music-invite-decline");
+const sharedTheaterPanel = document.getElementById("shared-theater-panel");
+const sharedTheaterScreen = document.getElementById("shared-theater-screen");
+const sharedTheaterTitle = document.getElementById("shared-theater-title");
+const sharedTheaterPlayPauseButton = document.getElementById("shared-theater-play-pause-btn");
+const sharedTheaterStopButton = document.getElementById("shared-theater-stop-btn");
+const sharedTheaterCollapseButton = document.getElementById("shared-theater-collapse-btn");
+const sharedTheaterLeaveButton = document.getElementById("shared-theater-leave-btn");
+const musicEmbedWrap = musicYouTubeFrame?.parentElement;
 let musicPlaylist = [];
 let currentMusicIndex = -1;
 let currentMusicTrack = null;
@@ -180,6 +227,7 @@ let youtubePlayer = null;
 let youtubePlayerReady = false;
 let youtubePlayerPromise = null;
 let youtubeApiPromise = null;
+let youtubePlayerInstanceGeneration = 0;
 let youtubeBufferingTimeoutId = null;
 const YOUTUBE_PLAYER_TIMEOUT_MS = 15000;
 let musicPlaybackError = "";
@@ -188,9 +236,11 @@ let musicSyncRoom = "";
 let musicSyncLeader = "";
 let pendingMusicInvite = null;
 let outgoingMusicInvite = false;
-let suppressMusicSyncUntil = 0;
 let lastObservedMusicTime = null;
 let lastMusicHeartbeatAt = 0;
+let pendingMusicPlaybackCommand = null;
+let musicLoadGeneration = 0;
+let remoteMusicStateGeneration = 0;
 
 function formatApiError(detail) {
     if (typeof detail === "string") return detail;
@@ -231,7 +281,7 @@ async function apiFetch(path, options = {}) {
     return data;
 }
 
-async function loadProtectedMedia(element, url) {
+async function loadProtectedMedia(element, url, fallbackUrl = "") {
     try {
         const response = await fetch(`${API_BASE}${url}`, {
             headers: { Authorization: `Bearer ${accessToken}` },
@@ -249,7 +299,20 @@ async function loadProtectedMedia(element, url) {
         element.src = objectUrl;
     } catch (error) {
         console.error("Không thể tải tệp trong cuộc trò chuyện:", error);
-        if (element instanceof HTMLImageElement) element.alt = "Không thể tải ảnh đính kèm.";
+        if (element instanceof HTMLImageElement) {
+            if (fallbackUrl) element.src = fallbackUrl;
+            else element.alt = "Không thể tải ảnh đính kèm.";
+        }
+    }
+}
+
+function setAvatarImage(element, value) {
+    if (!element) return;
+    const source = safeAvatarUrl(value || DEFAULT_AVATAR);
+    if (source.startsWith("/uploads/")) {
+        loadProtectedMedia(element, source, DEFAULT_AVATAR);
+    } else {
+        element.src = source;
     }
 }
 
@@ -257,6 +320,9 @@ function setAuthenticated(username, token, isAdmin) {
     currentUsername = username;
     accessToken = token;
     localStorage.setItem(TOKEN_KEY, token);
+    apiFetch(`/profile/${encodeURIComponent(username)}`)
+        .then((profile) => setAvatarImage(appRailAvatar, profile.avatar_url))
+        .catch((error) => console.error("Không thể tải ảnh đại diện:", error));
     loadYouTubePlaylist(username);
     if (adminLink) adminLink.classList.toggle("hidden", !isAdmin);
     loginScreen.classList.add("hidden");
@@ -280,6 +346,7 @@ function signOut(reload = true) {
     if (musicYouTubeFrame) {
         musicYouTubeFrame.classList.add("hidden");
     }
+    setSharedTheaterVisible(false);
     if (youtubePlayerReady && youtubePlayer) youtubePlayer.stopVideo();
     if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
     if (musicOpenSource) musicOpenSource.classList.add("hidden");
@@ -309,6 +376,7 @@ function signOut(reload = true) {
     currentTargetUser = "";
     currentRoom = "";
     groups = [];
+    setAvatarImage(appRailAvatar, DEFAULT_AVATAR);
     if (worldOpenButton) worldOpenButton.disabled = true;
     if (perspectiveOpenButton) perspectiveOpenButton.disabled = true;
     if (groupsList) groupsList.replaceChildren();
@@ -333,6 +401,8 @@ if (tabLoginBtn) {
             confirmPasswordInput.classList.add("hidden");
             confirmPasswordInput.required = false;
         }
+        if (authPhoneField) authPhoneField.classList.add("hidden");
+        if (phoneInput) phoneInput.required = false;
         if (passwordInput) passwordInput.autocomplete = "current-password";
         if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG NHẬP";
         if (authPanelTitle) authPanelTitle.textContent = "Chào mừng trở lại";
@@ -351,6 +421,8 @@ if (tabRegisterBtn) {
             confirmPasswordInput.classList.remove("hidden");
             confirmPasswordInput.required = true;
         }
+        if (authPhoneField) authPhoneField.classList.remove("hidden");
+        if (phoneInput) phoneInput.required = true;
         if (passwordInput) passwordInput.autocomplete = "new-password";
         if (authSubmitBtn) authSubmitBtn.innerText = "ĐĂNG KÝ";
         if (authPanelTitle) authPanelTitle.textContent = "Tạo tài khoản";
@@ -363,6 +435,7 @@ if (authForm) {
         event.preventDefault();
         const username = usernameInput.value.trim();
         const password = passwordInput.value;
+        const phone = phoneInput?.value.trim() || "";
 
         try {
             if (isRegisterMode) {
@@ -372,12 +445,13 @@ if (authForm) {
                 }
                 await apiFetch("/register", {
                     method: "POST",
-                    body: JSON.stringify({ username, password }),
+                    body: JSON.stringify({ username, password, phone }),
                 });
                 alert("Đăng ký thành công. Hãy đăng nhập để tiếp tục.");
                 if (tabLoginBtn) tabLoginBtn.click();
                 passwordInput.value = "";
                 confirmPasswordInput.value = "";
+                if (phoneInput) phoneInput.value = "";
                 return;
             }
 
@@ -399,6 +473,9 @@ function getPrivateRoomId(usernameA, usernameB) {
 }
 
 function safeAvatarUrl(value) {
+    if (/^\/uploads\/[a-f0-9]{32}\.(?:jpe?g|png|gif|webp)$/i.test(value || "")) {
+        return value;
+    }
     try {
         const url = new URL(value);
         return ["http:", "https:"].includes(url.protocol) ? url.href : DEFAULT_AVATAR;
@@ -419,7 +496,7 @@ function renderUsersList() {
         item.addEventListener("click", () => switchPrivateChat(user.username, user.avatar));
 
         const avatar = document.createElement("img");
-        avatar.src = user.avatar;
+        setAvatarImage(avatar, user.avatar);
         avatar.alt = "";
         avatar.className = "tg-avatar";
         avatar.onerror = () => { avatar.src = DEFAULT_AVATAR; };
@@ -624,6 +701,7 @@ async function switchGroupChat(group) {
     currentTargetUser = "";
     currentRoom = group.id;
     updateVideoCallButton();
+    if (conversationInfoButton) conversationInfoButton.disabled = false;
     if (worldOpenButton) worldOpenButton.disabled = true;
     if (perspectiveOpenButton) perspectiveOpenButton.disabled = false;
     if (perspectiveModal) perspectiveModal.classList.add("hidden");
@@ -640,15 +718,17 @@ async function switchGroupChat(group) {
         oldSocket.close();
     }
     if (headerName) headerName.textContent = group.name;
-    if (headerAvatar) headerAvatar.src = DEFAULT_AVATAR;
+    setAvatarImage(headerAvatar, DEFAULT_AVATAR);
     if (headerStatus) {
         headerStatus.textContent = `${group.members.length} thành viên`;
         headerStatus.classList.remove("is-online");
     }
+    setAvatarImage(conversationInfoAvatar, DEFAULT_AVATAR);
     updateMusicShareControls();
     if (chatLayout) chatLayout.classList.add("mobile-chat-open");
     renderUsersList();
     renderGroupsList();
+    void openConversationInfo(false);
     try {
         const room = group.id;
         messagesContainer.replaceChildren();
@@ -737,6 +817,8 @@ function updateVideoCallButton() {
         videoCallButton.disabled =
             !currentRoom || socket?.readyState !== WebSocket.OPEN ||
             Boolean(activeCall) || Boolean(pendingCallInvite);
+        const quickCallButton = document.getElementById("conversation-quick-call");
+        if (quickCallButton) quickCallButton.disabled = videoCallButton.disabled;
     }
 }
 
@@ -1194,16 +1276,19 @@ async function switchPrivateChat(targetUser, avatar) {
     }
     currentRoom = getPrivateRoomId(currentUsername, targetUser);
     updateVideoCallButton();
+    if (conversationInfoButton) conversationInfoButton.disabled = false;
     updateMusicShareControls();
     if (headerName) headerName.textContent = targetUser;
-    if (headerAvatar) headerAvatar.src = safeAvatarUrl(avatar);
+    setAvatarImage(headerAvatar, avatar);
     if (headerStatus) {
         headerStatus.textContent = "đang kết nối...";
         headerStatus.classList.remove("is-online");
     }
+    setAvatarImage(conversationInfoAvatar, avatar);
     if (chatLayout) chatLayout.classList.add("mobile-chat-open");
     renderUsersList();
     renderGroupsList();
+    void openConversationInfo(false);
 
     try {
         await loadHistory(currentRoom);
@@ -1213,6 +1298,179 @@ async function switchPrivateChat(targetUser, avatar) {
         alert(error.message || "Không thể mở cuộc trò chuyện.");
     }
 }
+
+function updateConversationInfoTab(selectedTab) {
+    for (const tab of conversationInfoModal?.querySelectorAll("[data-info-tab]") || []) {
+        const selected = tab.dataset.infoTab === selectedTab;
+        tab.classList.toggle("active", selected);
+        tab.setAttribute("aria-selected", String(selected));
+        if (tab === document.activeElement && !selected) tab.blur();
+    }
+    for (const panel of conversationInfoModal?.querySelectorAll(".conversation-info-panel") || []) {
+        panel.classList.toggle("hidden", panel.id !== `shared-${selectedTab}-panel`);
+    }
+}
+
+function setSharedContentStatus(panel, message) {
+    const status = panel?.querySelector(".shared-content-status");
+    if (status) {
+        status.textContent = message;
+        status.classList.toggle("hidden", !message);
+    }
+}
+
+function renderSharedImages(images) {
+    sharedImagesList?.replaceChildren();
+    const panel = document.getElementById("shared-images-panel");
+    setSharedContentStatus(panel, images.length ? "" : "Chưa có hình ảnh nào được chia sẻ.");
+    for (const image of images) {
+        const item = document.createElement("figure");
+        item.className = "shared-image-item";
+        const thumbnail = document.createElement("img");
+        thumbnail.alt = `Ảnh được chia sẻ bởi ${image.sender || "thành viên"}`;
+        thumbnail.loading = "lazy";
+        loadProtectedMedia(thumbnail, image.url);
+        const caption = document.createElement("figcaption");
+        caption.textContent = [image.sender, image.timestamp].filter(Boolean).join(" · ");
+        item.append(thumbnail, caption);
+        sharedImagesList?.append(item);
+    }
+}
+
+function renderSharedLinks(links) {
+    sharedLinksList?.replaceChildren();
+    const panel = document.getElementById("shared-links-panel");
+    const safeLinks = [];
+    for (const link of links) {
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(link.url);
+        } catch {
+            continue;
+        }
+        if (!["http:", "https:"].includes(parsedUrl.protocol)) continue;
+        safeLinks.push({ ...link, parsedUrl });
+    }
+    setSharedContentStatus(panel, safeLinks.length ? "" : "Chưa có liên kết nào được chia sẻ.");
+    for (const link of safeLinks) {
+        const item = document.createElement("a");
+        item.className = "shared-link-item";
+        item.href = link.parsedUrl.href;
+        item.target = "_blank";
+        item.rel = "noopener noreferrer";
+        const host = document.createElement("strong");
+        host.textContent = link.parsedUrl.hostname;
+        const address = document.createElement("span");
+        address.textContent = link.url;
+        const caption = document.createElement("small");
+        caption.textContent = [link.sender, link.timestamp].filter(Boolean).join(" · ");
+        item.append(host, address, caption);
+        sharedLinksList?.append(item);
+    }
+    if (sharedLinksList?.childElementCount && panel) setSharedContentStatus(panel, "");
+}
+
+function renderSharedMembers(group) {
+    sharedMembersList?.replaceChildren();
+    for (const username of group?.members || []) {
+        const item = document.createElement("div");
+        item.className = "shared-member-item";
+        const avatar = document.createElement("span");
+        avatar.className = "shared-member-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.textContent = Array.from(username)[0]?.toLocaleUpperCase() || "?";
+        const name = document.createElement("strong");
+        name.textContent = username;
+        const role = document.createElement("small");
+        role.textContent = username === currentUsername
+            ? "Bạn"
+            : username === group.created_by
+                ? "Trưởng nhóm"
+                : "Thành viên";
+        item.append(avatar, name, role);
+        sharedMembersList?.append(item);
+    }
+}
+
+async function openConversationInfo(showPanel = true) {
+    const room = currentRoom;
+    if (!room || !conversationInfoModal) return;
+    const group = groups.find((item) => item.id === room);
+    const title = headerName?.textContent || "Cuộc trò chuyện";
+    if (conversationInfoTitle) conversationInfoTitle.textContent = title;
+    if (conversationInfoName) conversationInfoName.textContent = title;
+    if (conversationInfoStatus) {
+        conversationInfoStatus.textContent = group
+            ? `${group.members.length} thành viên${group.created_by ? ` · Tạo bởi ${group.created_by}` : ""}`
+            : headerStatus?.textContent || "Trò chuyện riêng";
+    }
+    sharedMembersTab?.classList.toggle("hidden", !group);
+    const quickMembersButton = document.getElementById("conversation-quick-members");
+    quickMembersButton?.classList.toggle("hidden", !group);
+    const quickWorldButton = document.getElementById("conversation-quick-world");
+    const quickPerspectiveButton = document.getElementById("conversation-quick-perspective");
+    if (quickWorldButton) quickWorldButton.disabled = Boolean(worldOpenButton?.disabled);
+    if (quickPerspectiveButton) quickPerspectiveButton.disabled = Boolean(perspectiveOpenButton?.disabled);
+    if (group) renderSharedMembers(group);
+    updateConversationInfoTab("images");
+    renderSharedImages([]);
+    renderSharedLinks([]);
+    setSharedContentStatus(document.getElementById("shared-images-panel"), "Đang tải ảnh đã chia sẻ...");
+    setSharedContentStatus(document.getElementById("shared-links-panel"), "Đang tải liên kết đã chia sẻ...");
+    const isMobile = window.matchMedia("(max-width: 700px)").matches;
+    if (isMobile && !showPanel) {
+        conversationInfoModal.classList.add("hidden");
+    } else {
+        conversationInfoModal.classList.remove("hidden");
+    }
+    conversationInfoModal.classList.toggle("mobile-info-open", isMobile && showPanel);
+    conversationInfoModal.classList.toggle("tablet-info-open", !isMobile && window.innerWidth <= 1200 && showPanel);
+    try {
+        const shared = await apiFetch(`/messages/${encodeURIComponent(room)}/shared`);
+        if (currentRoom !== room || conversationInfoModal.classList.contains("hidden")) return;
+        renderSharedImages(shared.images || []);
+        renderSharedLinks(shared.links || []);
+    } catch (error) {
+        console.error("Không thể tải ảnh và liên kết đã chia sẻ:", error);
+        setSharedContentStatus(document.getElementById("shared-images-panel"), "Không thể tải ảnh đã chia sẻ.");
+        setSharedContentStatus(document.getElementById("shared-links-panel"), "Không thể tải liên kết đã chia sẻ.");
+    }
+}
+
+conversationInfoButton?.addEventListener("click", () => openConversationInfo(true));
+conversationInfoCloseButton?.addEventListener("click", () => {
+    conversationInfoModal?.classList.remove("mobile-info-open");
+    conversationInfoModal?.classList.add("hidden");
+});
+conversationInfoModal?.addEventListener("click", (event) => {
+    if (event.target === conversationInfoModal) {
+        conversationInfoModal.classList.remove("mobile-info-open");
+        conversationInfoModal.classList.add("hidden");
+    }
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        conversationInfoModal?.classList.remove("mobile-info-open");
+        conversationInfoModal?.classList.add("hidden");
+    }
+});
+conversationInfoModal?.querySelectorAll("[data-info-tab]").forEach((tab) => {
+    tab.addEventListener("click", () => updateConversationInfoTab(tab.dataset.infoTab));
+});
+document.getElementById("conversation-quick-call")?.addEventListener("click", () => videoCallButton?.click());
+document.getElementById("conversation-quick-world")?.addEventListener("click", () => worldOpenButton?.click());
+document.getElementById("conversation-quick-perspective")?.addEventListener("click", () => perspectiveOpenButton?.click());
+document.getElementById("conversation-quick-pin")?.addEventListener("click", () => {
+    document.querySelector(".tg-chat-item.active .chat-pin-button")?.click();
+});
+document.getElementById("conversation-quick-members")?.addEventListener("click", () => updateConversationInfoTab("members"));
+document.getElementById("header-contacts-btn")?.addEventListener("click", () => openContactsModal("search"));
+document.getElementById("rail-files-btn")?.addEventListener("click", () => {
+    if (!currentRoom) return;
+    openConversationInfo().then(() => updateConversationInfoTab("images"));
+});
+document.getElementById("rail-create-group-btn")?.addEventListener("click", () => openContactsModal("search"));
+document.getElementById("rail-settings-btn")?.addEventListener("click", () => myProfileBtn?.click());
 
 async function loadHistory(room) {
     if (!messagesContainer) return;
@@ -1329,6 +1587,18 @@ function connectWebSocket(room, username) {
         } else if (data.type === "music_sync") {
             handleMusicSyncEvent(data);
         } else if (data.type === "error") {
+            if (
+                outgoingMusicInvite &&
+                data.message?.startsWith("Cần có ít nhất một thành viên đang mở cuộc trò chuyện này")
+            ) {
+                outgoingMusicInvite = false;
+                musicSyncActive = false;
+                musicSyncRoom = "";
+                musicSyncLeader = "";
+                if (musicShareStatus) musicShareStatus.textContent = data.message;
+                setSharedTheaterVisible(false);
+                updateMusicShareControls();
+            }
             if (activeCall) {
                 setCallStatus(data.message);
                 if (data.message.includes("đã đủ") || data.message.includes("không còn hoạt động")) {
@@ -1524,8 +1794,29 @@ function renderMessage(message) {
         renderMessageReactions(reactions, message.reactions || []);
         item.append(reactions);
 
+        const moreButton = document.createElement("button");
+        moreButton.type = "button";
+        moreButton.className = "msg-more-button";
+        moreButton.textContent = "⋯";
+        moreButton.setAttribute("aria-label", "Thêm thao tác tin nhắn");
+        moreButton.setAttribute("aria-expanded", "false");
+
         const actions = document.createElement("div");
-        actions.className = "msg-actions";
+        actions.className = "msg-actions hidden";
+        actions.addEventListener("click", (event) => {
+            if (event.target instanceof Element && event.target.closest(".msg-reaction-toggle")) return;
+            actions.classList.add("hidden");
+            moreButton.setAttribute("aria-expanded", "false");
+        });
+        moreButton.addEventListener("click", () => {
+            const opening = actions.classList.contains("hidden");
+            messagesContainer.querySelectorAll(".msg-actions").forEach((menu) => {
+                menu.classList.add("hidden");
+                menu.parentElement?.querySelector(".msg-more-button")?.setAttribute("aria-expanded", "false");
+            });
+            actions.classList.toggle("hidden", !opening);
+            moreButton.setAttribute("aria-expanded", String(opening));
+        });
         const reply = document.createElement("button");
         reply.type = "button";
         reply.className = "msg-reply-action";
@@ -1576,7 +1867,9 @@ function renderMessage(message) {
             button.addEventListener("click", () => sendMessageReaction(message._id, emoji));
             reactionPicker.append(button);
         }
-        item.append(actions, reactionPicker);
+        actions.append(reactionPicker);
+        item.append(actions, moreButton);
+        item.append(moreButton);
     }
     messagesContainer.append(item);
 }
@@ -2701,8 +2994,11 @@ if (fileInput) {
 
 async function startVoiceRecording() {
     if (!currentRoom) return alert("Vui lòng chọn một cuộc trò chuyện trước khi ghi thoại.");
+    if (!window.isSecureContext) {
+        return alert("Trình duyệt chặn microphone trên kết nối HTTP. Hãy mở ứng dụng bằng HTTPS để ghi âm trên điện thoại.");
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
-        return alert("Trình duyệt không hỗ trợ ghi âm thoại. Hãy thử trên HTTPS hoặc trình duyệt khác.");
+        return alert("Trình duyệt này không hỗ trợ ghi âm thoại. Hãy thử bằng trình duyệt mới hơn.");
     }
     if (!window.MediaRecorder) {
         return alert("Trình duyệt không hỗ trợ ghi âm cho tin nhắn thoại.");
@@ -3085,18 +3381,221 @@ if (backUsersBtn) {
     });
 }
 
-const myProfileBtn = document.getElementById("my-profile-modal-btn");
-if (myProfileBtn) {
-    myProfileBtn.addEventListener("click", async () => {
-        try {
-            const user = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
-            if (profileUsername) profileUsername.textContent = user.username;
-            if (profileAvatarInput) profileAvatarInput.value = user.avatar_url || "";
-            if (profileBioInput) profileBioInput.value = user.bio || "";
-            if (profileModal) profileModal.classList.remove("hidden");
-        } catch (error) {
-            alert(error.message || "Không thể tải hồ sơ.");
+function createFriendItem(user, actions = []) {
+    const item = document.createElement("article");
+    item.className = "friend-item";
+    const avatar = document.createElement("img");
+    avatar.className = "tg-avatar";
+    avatar.alt = "";
+    setAvatarImage(avatar, user.avatar_url);
+    const identity = document.createElement("div");
+    identity.className = "friend-item-identity";
+    const name = document.createElement("strong");
+    name.textContent = user.username;
+    const bio = document.createElement("span");
+    bio.textContent = user.bio || "Thành viên Chat Realtime";
+    identity.append(name, bio);
+    item.append(avatar, identity);
+    for (const action of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = action.className || "friend-item-action";
+        button.textContent = action.label;
+        button.addEventListener("click", action.onClick);
+        item.append(button);
+    }
+    return item;
+}
+
+function showFriendListMessage(container, message) {
+    if (!container) return;
+    const empty = document.createElement("p");
+    empty.className = "friend-list-empty";
+    empty.textContent = message;
+    container.replaceChildren(empty);
+}
+
+async function loadFriendLists() {
+    if (!friendRequestsList || !friendsList) return;
+    friendRequestsList.setAttribute("aria-busy", "true");
+    friendsList.setAttribute("aria-busy", "true");
+    try {
+        const [requests, friends] = await Promise.all([
+            apiFetch("/friend-requests"),
+            apiFetch("/friends"),
+        ]);
+        friendRequestsList.replaceChildren();
+        if (!requests.length) showFriendListMessage(friendRequestsList, "Chưa có lời mời kết bạn.");
+        for (const request of requests) {
+            const accept = {
+                label: "Chấp nhận",
+                className: "friend-item-action primary",
+                onClick: async () => {
+                    try {
+                        await apiFetch(`/friend-requests/${encodeURIComponent(request.id)}/accept`, { method: "POST" });
+                        await loadFriendLists();
+                    } catch (error) {
+                        alert(error.message || "Không thể chấp nhận lời mời.");
+                    }
+                },
+            };
+            const decline = {
+                label: "Từ chối",
+                onClick: async () => {
+                    try {
+                        await apiFetch(`/friend-requests/${encodeURIComponent(request.id)}`, { method: "DELETE" });
+                        await loadFriendLists();
+                    } catch (error) {
+                        alert(error.message || "Không thể từ chối lời mời.");
+                    }
+                },
+            };
+            friendRequestsList.append(createFriendItem(request, [accept, decline]));
         }
+
+        friendsList.replaceChildren();
+        if (!friends.length) showFriendListMessage(friendsList, "Bạn chưa có bạn bè. Hãy tìm bằng số điện thoại.");
+        for (const friend of friends) {
+            const chat = {
+                label: "Nhắn tin",
+                className: "friend-item-action primary",
+                onClick: () => {
+                    contactsModal?.classList.add("hidden");
+                    switchPrivateChat(friend.username, friend.avatar_url);
+                },
+            };
+            friendsList.append(createFriendItem(friend, [chat]));
+        }
+    } catch (error) {
+        showFriendListMessage(friendRequestsList, error.message || "Không thể tải danh sách bạn bè.");
+        showFriendListMessage(friendsList, "Hãy thử tải lại danh sách.");
+    } finally {
+        friendRequestsList.removeAttribute("aria-busy");
+        friendsList.removeAttribute("aria-busy");
+    }
+}
+
+function setContactsView(view) {
+    const showDirectory = view !== "search";
+    friendsDirectoryView?.classList.toggle("hidden", !showDirectory);
+    friendsSearchView?.classList.toggle("hidden", showDirectory);
+    contactsDirectoryTab?.classList.toggle("active", showDirectory);
+    contactsDirectoryTab?.setAttribute("aria-selected", String(showDirectory));
+    contactsSearchTab?.classList.toggle("active", !showDirectory);
+    contactsSearchTab?.setAttribute("aria-selected", String(!showDirectory));
+}
+
+contactsDirectoryTab?.addEventListener("click", () => setContactsView("friends"));
+contactsSearchTab?.addEventListener("click", () => setContactsView("search"));
+
+async function openContactsModal(view = "friends") {
+    if (!contactsModal) return;
+    contactsModal.classList.remove("hidden");
+    setContactsView(view);
+    if (view === "search" && friendSearchStatus) friendSearchStatus.textContent = "";
+    if (view === "search" && friendSearchResult) {
+        friendSearchResult.replaceChildren();
+        friendSearchResult.classList.add("hidden");
+    }
+    await loadFriendLists();
+}
+
+document.getElementById("contacts-close-btn")?.addEventListener("click", () => {
+    contactsModal?.classList.add("hidden");
+});
+contactsModal?.addEventListener("click", (event) => {
+    if (event.target === contactsModal) contactsModal.classList.add("hidden");
+});
+friendSearchForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const phone = friendPhoneSearch?.value.trim();
+    if (!phone || !friendSearchStatus || !friendSearchResult) return;
+    friendSearchStatus.textContent = "Đang tìm...";
+    friendSearchResult.replaceChildren();
+    friendSearchResult.classList.add("hidden");
+    try {
+        const user = await apiFetch(`/friends/search?phone=${encodeURIComponent(phone)}`);
+        const addButton = document.createElement("button");
+        addButton.type = "button";
+        addButton.className = "friend-item-action primary";
+        addButton.textContent = "Kết bạn";
+        addButton.addEventListener("click", async () => {
+            addButton.disabled = true;
+            try {
+                await apiFetch("/friend-requests", {
+                    method: "POST",
+                    body: JSON.stringify({ phone }),
+                });
+                addButton.textContent = "Đã gửi lời mời";
+                if (friendSearchStatus) friendSearchStatus.textContent = "Đã gửi lời mời kết bạn.";
+            } catch (error) {
+                addButton.disabled = false;
+                alert(error.message || "Không thể gửi lời mời kết bạn.");
+            }
+        });
+        friendSearchResult.append(createFriendItem(user, [addButton]));
+        friendSearchResult.classList.remove("hidden");
+        friendSearchStatus.textContent = "Đã tìm thấy tài khoản.";
+    } catch (error) {
+        friendSearchStatus.textContent = error.message || "Không tìm thấy tài khoản.";
+    }
+});
+
+const myProfileBtn = document.getElementById("my-profile-modal-btn");
+let profileAvatarObjectUrl = "";
+
+function setProfileAvatarPreview(source) {
+    if (!profileAvatarPreview) return;
+    if (profileAvatarObjectUrl) {
+        URL.revokeObjectURL(profileAvatarObjectUrl);
+        profileAvatarObjectUrl = "";
+    }
+    setAvatarImage(profileAvatarPreview, source);
+}
+
+async function openMyProfile() {
+    try {
+        const user = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+        if (profileUsername) profileUsername.textContent = user.username;
+        if (profilePhoneInput) profilePhoneInput.value = user.phone || "";
+        if (profileAvatarInput) profileAvatarInput.value = user.avatar_url || "";
+        if (profileAvatarFile) profileAvatarFile.value = "";
+        if (profileAvatarFileName) profileAvatarFileName.textContent = "JPG, PNG, GIF hoặc WebP";
+        setProfileAvatarPreview(user.avatar_url || DEFAULT_AVATAR);
+        if (profileBioInput) profileBioInput.value = user.bio || "";
+        if (profileModal) profileModal.classList.remove("hidden");
+    } catch (error) {
+        alert(error.message || "Không thể tải hồ sơ.");
+    }
+}
+
+myProfileBtn?.addEventListener("click", openMyProfile);
+appRailAvatarButton?.addEventListener("click", openMyProfile);
+
+if (profileAvatarFile) {
+    profileAvatarFile.addEventListener("change", () => {
+        const file = profileAvatarFile.files?.[0];
+        if (!file) return;
+        if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(file.type)) {
+            alert("Chọn ảnh JPG, PNG, GIF hoặc WebP.");
+            profileAvatarFile.value = "";
+            return;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+            alert("Ảnh đại diện không được lớn hơn 20 MB.");
+            profileAvatarFile.value = "";
+            return;
+        }
+        if (profileAvatarObjectUrl) URL.revokeObjectURL(profileAvatarObjectUrl);
+        profileAvatarObjectUrl = URL.createObjectURL(file);
+        if (profileAvatarPreview) profileAvatarPreview.src = profileAvatarObjectUrl;
+        if (profileAvatarFileName) profileAvatarFileName.textContent = file.name;
+    });
+}
+
+if (profileAvatarInput) {
+    profileAvatarInput.addEventListener("input", () => {
+        if (!profileAvatarFile?.files?.length) setProfileAvatarPreview(profileAvatarInput.value.trim());
     });
 }
 
@@ -3117,18 +3616,38 @@ const saveProfileBtn = document.getElementById("save-profile-btn");
 if (saveProfileBtn) {
     saveProfileBtn.addEventListener("click", async () => {
         try {
+            const selectedAvatar = profileAvatarFile?.files?.[0];
+            let avatarUrl = profileAvatarInput.value.trim();
+            if (selectedAvatar) {
+                const formData = new FormData();
+                formData.append("file", selectedAvatar);
+                const uploadedAvatar = await apiFetch("/upload", {
+                    method: "POST",
+                    body: formData,
+                });
+                avatarUrl = uploadedAvatar.url;
+                profileAvatarInput.value = avatarUrl;
+                profileAvatarFile.value = "";
+                if (profileAvatarFileName) profileAvatarFileName.textContent = "JPG, PNG, GIF hoặc WebP";
+                setProfileAvatarPreview(avatarUrl);
+            }
             await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`, {
                 method: "PUT",
                 body: JSON.stringify({
-                    avatar_url: profileAvatarInput.value.trim(),
+                    avatar_url: avatarUrl,
                     bio: profileBioInput.value.trim(),
+                    phone: profilePhoneInput?.value.trim() || "",
                 }),
             });
             if (profileModal) profileModal.classList.add("hidden");
             await loadUsersList();
             const myProfile = await apiFetch(`/profile/${encodeURIComponent(currentUsername)}`);
+            setAvatarImage(appRailAvatar, myProfile.avatar_url);
             if (currentTargetUser === currentUsername && headerAvatar) {
-                headerAvatar.src = safeAvatarUrl(myProfile.avatar_url);
+                setAvatarImage(headerAvatar, myProfile.avatar_url);
+            }
+            if (currentTargetUser === currentUsername && conversationInfoAvatar) {
+                setAvatarImage(conversationInfoAvatar, myProfile.avatar_url);
             }
         } catch (error) {
             alert(error.message || "Không thể lưu hồ sơ.");
@@ -3237,26 +3756,31 @@ function renderMusicPlaylist() {
 }
 
 function updateMusicShareControls() {
+    const isGroupChat = currentRoom.startsWith("group_");
     const canShare = Boolean(
-        currentTargetUser &&
         currentRoom &&
-        !currentRoom.startsWith("group_") &&
         socket?.readyState === WebSocket.OPEN
     );
     if (musicShareButton) {
         musicShareButton.disabled = !canShare || !currentMusicTrack;
         musicShareButton.classList.toggle("hidden", musicSyncActive);
+        musicShareButton.textContent = isGroupChat ? "👥 Mời cả nhóm nghe/xem chung" : "👥 Mời nghe/xem chung";
     }
     if (musicLeaveShareButton) musicLeaveShareButton.classList.toggle("hidden", !musicSyncActive);
+    updateSharedTheaterPlaybackButton();
     if (!musicShareStatus) return;
     if (musicSyncActive) {
-        musicShareStatus.textContent = `Đang nghe/xem cùng ${currentTargetUser}. Cả hai đều có thể điều khiển.`;
+        musicShareStatus.textContent = isGroupChat ?
+            "Đang nghe/xem chung trong nhóm. Thành viên đều có thể điều khiển." :
+            `Đang nghe/xem cùng ${currentTargetUser}. Cả hai đều có thể điều khiển.`;
     } else if (!canShare) {
-        musicShareStatus.textContent = "Chọn một cuộc trò chuyện riêng để mời đối phương.";
+        musicShareStatus.textContent = "Mở một cuộc trò chuyện để mời nghe/xem chung.";
     } else if (!currentMusicTrack) {
         musicShareStatus.textContent = "Phát một video YouTube trước khi gửi lời mời.";
     } else {
-        musicShareStatus.textContent = "Mời đối phương tham gia; họ cần đồng ý trước khi phát.";
+        musicShareStatus.textContent = isGroupChat ?
+            "Mời cả nhóm để tự động mở rạp xem chung cho thành viên đang trực tuyến." :
+            "Mời đối phương để tự động mở rạp xem chung trên cả hai thiết bị.";
     }
 }
 
@@ -3267,22 +3791,65 @@ function updateMusicTransportControls() {
         currentMusicIndex < 0 || currentMusicIndex >= musicPlaylist.length - 1;
 }
 
+function updateSharedTheaterPlaybackButton() {
+    if (!sharedTheaterPlayPauseButton) return;
+    const isPlaying = youtubePlayerReady && youtubePlayer?.getPlayerState() === 1;
+    sharedTheaterPlayPauseButton.textContent = isPlaying ? "Ⅱ Tạm dừng" : "▶ Phát";
+    sharedTheaterPlayPauseButton.setAttribute(
+        "aria-label",
+        isPlaying ? "Tạm dừng cho cả hai" : "Phát cho cả hai",
+    );
+    sharedTheaterPlayPauseButton.disabled = !currentMusicTrack;
+    if (sharedTheaterStopButton) sharedTheaterStopButton.disabled = !currentMusicTrack;
+}
+
+function setSharedTheaterVisible(visible) {
+    if (!sharedTheaterPanel) return;
+    sharedTheaterPanel.classList.toggle("hidden", !visible);
+    if (visible && musicYouTubeFrame && sharedTheaterScreen) {
+        musicModal?.classList.add("hidden");
+        sharedTheaterScreen.append(musicYouTubeFrame);
+        sharedTheaterPanel.classList.remove("is-collapsed");
+        if (sharedTheaterCollapseButton) {
+            sharedTheaterCollapseButton.textContent = "Thu nhỏ";
+            sharedTheaterCollapseButton.setAttribute("aria-expanded", "true");
+        }
+    } else if (!visible && musicYouTubeFrame && musicEmbedWrap && musicEmbedEmpty) {
+        musicEmbedWrap.insertBefore(musicYouTubeFrame, musicEmbedEmpty);
+    }
+    if (sharedTheaterTitle) {
+        sharedTheaterTitle.textContent = currentMusicTrack?.name || "Đang chờ video...";
+    }
+    updateSharedTheaterPlaybackButton();
+}
+
+function clearMusicPlaybackDisplay(message) {
+    setSharedTheaterVisible(false);
+    if (musicYouTubeFrame) musicYouTubeFrame.classList.add("hidden");
+    if (musicEmbedEmpty) musicEmbedEmpty.classList.remove("hidden");
+    if (musicOpenSource) musicOpenSource.classList.add("hidden");
+    if (musicPlaybackStatus) musicPlaybackStatus.textContent = message;
+    updateSharedTheaterPlaybackButton();
+}
+
 function resetMusicSyncSession(notifyPartner = false) {
     if (notifyPartner && pendingMusicInvite) sendMusicSignal({ action: "decline" });
     if (notifyPartner && (musicSyncActive || outgoingMusicInvite)) {
         sendMusicSignal({ action: "leave" });
     }
+    setSharedTheaterVisible(false);
     pendingMusicInvite = null;
     if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
     musicSyncActive = false;
     musicSyncRoom = "";
     musicSyncLeader = "";
+    pendingMusicPlaybackCommand = null;
     outgoingMusicInvite = false;
     updateMusicShareControls();
 }
 
 function sendMusicSignal(data) {
-    if (socket?.readyState !== WebSocket.OPEN || !currentRoom || currentRoom.startsWith("group_")) return false;
+    if (socket?.readyState !== WebSocket.OPEN || !currentRoom) return false;
     socket.send(JSON.stringify({ type: "music_sync", ...data }));
     return true;
 }
@@ -3294,9 +3861,8 @@ function getMusicSnapshot(action) {
     }
     const playlistId = currentMusicTrack?.playlistId || "";
     const playerState = youtubePlayerReady && youtubePlayer ? youtubePlayer.getPlayerState() : -1;
-    const playbackState = action === "invite" ?
-        (playerState === 2 || playerState === 0 ? "paused" : "playing") :
-        (playerState === 0 ? "ended" : playerState === 2 ? "paused" : "playing");
+    const playbackState = playerState === 2 ? "paused" :
+        playerState === 0 || (playerState === -1 && youtubePlayerReady) ? "ended" : "playing";
     const position = youtubePlayerReady && youtubePlayer ?
         Math.max(0, Math.min(86400, youtubePlayer.getCurrentTime() || 0)) : 0;
     return {
@@ -3315,6 +3881,124 @@ function sendMusicState() {
         musicSyncLeader = currentUsername;
         lastMusicHeartbeatAt = Date.now();
     }
+}
+
+function markMusicPlaybackCommand(playbackState, force = false) {
+    if (!force && youtubePlayerReady && youtubePlayer) {
+        const playerState = youtubePlayer.getPlayerState();
+        if (
+            (playbackState === "playing" && playerState === 1) ||
+            (playbackState === "paused" && playerState === 2) ||
+            (playbackState === "ended" && [0, -1].includes(playerState))
+        ) {
+            return;
+        }
+    }
+    pendingMusicPlaybackCommand = {
+        playbackState,
+        expiresAt: Date.now() + 12000,
+        trackKey: currentMusicTrack?.key ||
+            `${currentMusicTrack?.videoId || ""}:${currentMusicTrack?.playlistId || ""}`,
+    };
+}
+
+function isPendingMusicPlaybackCommand() {
+    if (!pendingMusicPlaybackCommand) return false;
+    if (Date.now() >= pendingMusicPlaybackCommand.expiresAt) {
+        pendingMusicPlaybackCommand = null;
+        return false;
+    }
+    return true;
+}
+
+function consumeMusicPlaybackCommand(state) {
+    if (!isPendingMusicPlaybackCommand()) return false;
+    const expectedState = pendingMusicPlaybackCommand.playbackState;
+    const expectedTrackKey = pendingMusicPlaybackCommand.trackKey;
+    const actualTrackKey = currentMusicTrack?.key ||
+        `${currentMusicTrack?.videoId || ""}:${currentMusicTrack?.playlistId || ""}`;
+    if (expectedTrackKey !== actualTrackKey) return true;
+    const expectedVideoId = currentMusicTrack?.videoId;
+    const actualVideoId = youtubePlayerReady ? youtubePlayer?.getVideoData()?.video_id : "";
+    if (expectedVideoId && actualVideoId && expectedVideoId !== actualVideoId) return true;
+    const matchesExpectedState = (
+        (expectedState === "playing" && state === 1) ||
+        (expectedState === "paused" && state === 2) ||
+        (expectedState === "ended" && [0, -1].includes(state))
+    );
+    if (matchesExpectedState) pendingMusicPlaybackCommand = null;
+    return true;
+}
+
+function destroyYouTubePlayer() {
+    musicLoadGeneration++;
+    youtubePlayerInstanceGeneration++;
+    const playerToDestroy = youtubePlayer;
+    youtubePlayer = null;
+    youtubePlayerReady = false;
+    youtubePlayerPromise = null;
+    pendingMusicPlaybackCommand = null;
+    lastObservedMusicTime = null;
+    if (youtubeBufferingTimeoutId !== null) {
+        window.clearTimeout(youtubeBufferingTimeoutId);
+        youtubeBufferingTimeoutId = null;
+    }
+    if (playerToDestroy) {
+        try {
+            playerToDestroy.destroy();
+        } catch (error) {
+            console.error("Không thể đóng trình phát YouTube:", error);
+        }
+    }
+    if (musicYouTubeFrame) {
+        const playerPlaceholder = document.createElement("div");
+        playerPlaceholder.id = "music-youtube-player";
+        musicYouTubeFrame.replaceChildren(playerPlaceholder);
+    }
+}
+
+function broadcastSharedPlaybackState(playbackState) {
+    if (!musicSyncActive) return;
+    const snapshot = getMusicSnapshot("state");
+    snapshot.playback_state = playbackState;
+    markMusicPlaybackCommand(playbackState);
+    sendMusicSignal(snapshot);
+    musicSyncLeader = currentUsername;
+    lastMusicHeartbeatAt = Date.now();
+}
+
+function toggleSharedPlayback() {
+    if (!musicSyncActive || !currentMusicTrack) return;
+    const playerState = youtubePlayerReady && youtubePlayer ? youtubePlayer.getPlayerState() : -1;
+    const isPlaying = playerState === 1;
+    const playbackState = isPlaying ? "paused" : "playing";
+    broadcastSharedPlaybackState(playbackState);
+    if (playbackState === "playing" && youtubePlayerReady && youtubePlayer) {
+        if ([0, 5, -1].includes(playerState)) {
+            loadMusicInPlayer(currentMusicTrack, { position: 0, playbackState }).catch((error) => {
+                console.error("Không thể tiếp tục phát video chung:", error);
+                showMusicPlaybackError(error.message || "Không thể phát video.");
+            });
+        } else {
+            youtubePlayer.playVideo();
+        }
+    } else if (playbackState === "paused" && youtubePlayerReady && youtubePlayer) {
+        youtubePlayer.pauseVideo();
+    } else {
+        loadMusicInPlayer(currentMusicTrack, { playbackState }).catch((error) => {
+            console.error("Không thể điều khiển phát chung:", error);
+            showMusicPlaybackError(error.message || "Không thể điều khiển video.");
+        });
+    }
+    updateSharedTheaterPlaybackButton();
+}
+
+function stopSharedPlayback() {
+    if (!musicSyncActive || !currentMusicTrack) return;
+    broadcastSharedPlaybackState("ended");
+    destroyYouTubePlayer();
+    lastObservedMusicTime = 0;
+    clearMusicPlaybackDisplay("Đã dừng phát trên tất cả thiết bị.");
 }
 
 function showMusicPlaybackError(message) {
@@ -3410,16 +4094,27 @@ function loadYouTubeApi() {
 function ensureYouTubePlayer() {
     if (youtubePlayerReady && youtubePlayer) return Promise.resolve(youtubePlayer);
     if (youtubePlayerPromise) return youtubePlayerPromise;
+    const ensureGeneration = youtubePlayerInstanceGeneration;
     youtubePlayerPromise = loadYouTubeApi().then((YT) => new Promise((resolve, reject) => {
         const timeoutId = window.setTimeout(
             () => reject(new Error("YouTube chưa tạo được trình phát. Hãy thử tải lại hoặc mở video trên YouTube.")),
             YOUTUBE_PLAYER_TIMEOUT_MS,
         );
+        if (ensureGeneration !== youtubePlayerInstanceGeneration) {
+            window.clearTimeout(timeoutId);
+            resolve(null);
+            return;
+        }
         const playerFrame = createYouTubePlayerFrame(currentMusicTrack || {});
+        const playerInstanceGeneration = ++youtubePlayerInstanceGeneration;
         youtubePlayer = new YT.Player(playerFrame, {
             events: {
                 onReady: (event) => {
                     window.clearTimeout(timeoutId);
+                    if (playerInstanceGeneration !== youtubePlayerInstanceGeneration) {
+                        resolve(event.target);
+                        return;
+                    }
                     youtubePlayerReady = true;
                     const iframe = event.target.getIframe();
                     iframe.title = "Trình phát YouTube";
@@ -3432,6 +4127,7 @@ function ensureYouTubePlayer() {
                     setMusicPlaybackStatus("Trình duyệt chặn tự phát. Hãy nhấn Play trong khung video.");
                 },
                 onStateChange: (event) => {
+                    if (playerInstanceGeneration !== youtubePlayerInstanceGeneration) return;
                     if (youtubeBufferingTimeoutId !== null) {
                         window.clearTimeout(youtubeBufferingTimeoutId);
                         youtubeBufferingTimeoutId = null;
@@ -3452,16 +4148,23 @@ function ensureYouTubePlayer() {
                     } else if (event.data === YT.PlayerState.ENDED) {
                         setMusicPlaybackStatus("Video đã phát xong.");
                     }
+                    updateSharedTheaterPlaybackButton();
                     lastObservedMusicTime = youtubePlayer.getCurrentTime() || 0;
                     if (
-                        Date.now() >= suppressMusicSyncUntil &&
+                        !consumeMusicPlaybackCommand(event.data) &&
                         [YT.PlayerState.PLAYING, YT.PlayerState.PAUSED, YT.PlayerState.ENDED].includes(event.data)
                     ) {
                         sendMusicState();
                     }
+                    if (event.data === YT.PlayerState.ENDED && musicSyncActive) {
+                        destroyYouTubePlayer();
+                        lastObservedMusicTime = 0;
+                        clearMusicPlaybackDisplay("Video đã phát xong trên tất cả thiết bị.");
+                    }
                 },
                 onError: (event) => {
                     window.clearTimeout(timeoutId);
+                    if (playerInstanceGeneration !== youtubePlayerInstanceGeneration) return;
                     const reason = event.data === 101 || event.data === 150 ?
                         "Chủ video không cho phép phát trong khung nhúng." :
                         event.data === 153 ? "YouTube không nhận được thông tin trang nhúng. Hãy tải lại trang rồi thử lại." :
@@ -3481,6 +4184,9 @@ function ensureYouTubePlayer() {
 }
 
 async function loadMusicInPlayer(track, { position = 0, playbackState = "playing" } = {}) {
+    const loadGeneration = ++musicLoadGeneration;
+    markMusicPlaybackCommand(playbackState, true);
+    if (sharedTheaterTitle && musicSyncActive) sharedTheaterTitle.textContent = track.name;
     if (musicYouTubeFrame) musicYouTubeFrame.classList.remove("hidden");
     if (musicEmbedEmpty) musicEmbedEmpty.classList.add("hidden");
     if (musicOpenSource) {
@@ -3496,7 +4202,12 @@ async function loadMusicInPlayer(track, { position = 0, playbackState = "playing
     updateMusicTransportControls();
     updateMusicShareControls();
     const player = await ensureYouTubePlayer();
-    suppressMusicSyncUntil = Date.now() + 1800;
+    const requestedTrackKey = track.key ||
+        `${track.videoId || ""}:${track.playlistId || ""}`;
+    const activeTrackKey = currentMusicTrack?.key ||
+        `${currentMusicTrack?.videoId || ""}:${currentMusicTrack?.playlistId || ""}`;
+    if (!player || loadGeneration !== musicLoadGeneration || requestedTrackKey !== activeTrackKey) return;
+    markMusicPlaybackCommand(playbackState, true);
     lastObservedMusicTime = position;
     if (playbackState === "ended") {
         player.stopVideo();
@@ -3527,6 +4238,7 @@ async function playMusicTrack(index) {
     updateMusicShareControls();
     try {
         await loadMusicInPlayer(currentMusicTrack);
+        if (musicSyncActive) sendMusicState();
     } catch (error) {
         console.error("Không thể phát nội dung YouTube:", error);
         if (musicPlaybackStatus) musicPlaybackStatus.textContent = error.message || "Không thể phát nội dung YouTube.";
@@ -3535,6 +4247,7 @@ async function playMusicTrack(index) {
 
 function applyRemoteMusicState(data) {
     if (!musicSyncActive || currentRoom !== musicSyncRoom) return;
+    const stateGeneration = ++remoteMusicStateGeneration;
     const incomingKey = `${data.video_id || ""}:${data.playlist_id || ""}`;
     const activeKey = currentMusicTrack?.key ||
         `${currentMusicTrack?.videoId || ""}:${currentMusicTrack?.playlistId || ""}`;
@@ -3552,21 +4265,41 @@ function applyRemoteMusicState(data) {
         currentMusicTrack = track;
         currentMusicIndex = musicPlaylist.findIndex((item) => item.key === incomingKey);
         renderMusicPlaylist();
+        loadMusicInPlayer(track, {
+            position: data.position,
+            playbackState: data.playback_state,
+        }).catch((error) => console.error("Không thể đồng bộ trình phát:", error));
+        return;
     }
     updateMusicShareControls();
     musicSyncLeader = data.sender;
     lastMusicHeartbeatAt = Date.now();
+    if (data.playback_state === "ended") {
+        markMusicPlaybackCommand("ended", true);
+        destroyYouTubePlayer();
+        lastObservedMusicTime = 0;
+        clearMusicPlaybackDisplay("Đã dừng phát trên tất cả thiết bị.");
+        return;
+    }
     if (musicYouTubeFrame) musicYouTubeFrame.classList.remove("hidden");
     if (musicEmbedEmpty) musicEmbedEmpty.classList.add("hidden");
     if (musicPlaybackError && !trackChanged) return;
 
+    markMusicPlaybackCommand(data.playback_state, trackChanged);
     ensureYouTubePlayer().then((player) => {
-        if (!musicSyncActive || currentRoom !== musicSyncRoom) return;
+        if (
+            !player ||
+            stateGeneration !== remoteMusicStateGeneration ||
+            !musicSyncActive ||
+            currentRoom !== musicSyncRoom
+        ) return;
         const currentPosition = player.getCurrentTime() || 0;
         const currentState = player.getPlayerState();
-        const needsSeek = Math.abs(currentPosition - data.position) > 2;
-        suppressMusicSyncUntil = Date.now() + 1800;
-        if (trackChanged || currentState < 0 || currentState === 5 || data.playback_state === "ended") {
+        const positionDifference = Math.abs(currentPosition - data.position);
+        const needsSeek = data.playback_state === "playing" ?
+            positionDifference > 2 :
+            positionDifference > 0.25;
+        if (trackChanged || currentState < 0 || currentState === 5) {
             loadMusicInPlayer(track, {
                 position: data.position,
                 playbackState: data.playback_state,
@@ -3585,23 +4318,48 @@ function applyRemoteMusicState(data) {
 function handleMusicSyncEvent(data) {
     if (data.sender === currentUsername) return;
     if (data.action === "invite") {
-        pendingMusicInvite = data;
-        if (musicInviteDescription) {
-            musicInviteDescription.textContent = `${data.sender} mời bạn nghe/xem “${data.title}” cùng nhau.`;
+        pendingMusicInvite = null;
+        if (musicInviteBanner) musicInviteBanner.classList.add("hidden");
+        musicSyncActive = true;
+        musicSyncRoom = currentRoom;
+        musicSyncLeader = data.sender;
+        outgoingMusicInvite = false;
+        currentMusicTrack = {
+            key: `${data.video_id || ""}:${data.playlist_id || ""}`,
+            videoId: data.video_id || "",
+            playlistId: data.playlist_id || "",
+            name: data.title || "YouTube",
+            sourceUrl: data.video_id ?
+                `https://www.youtube.com/watch?v=${encodeURIComponent(data.video_id)}` :
+                `https://www.youtube.com/playlist?list=${encodeURIComponent(data.playlist_id)}`,
+        };
+        currentMusicIndex = musicPlaylist.findIndex((item) => item.key === currentMusicTrack.key);
+        renderMusicPlaylist();
+        setSharedTheaterVisible(true);
+        updateMusicShareControls();
+        loadMusicInPlayer(currentMusicTrack, {
+            position: data.position,
+            playbackState: data.playback_state,
+        }).catch((error) => {
+            console.error("Không thể mở rạp xem chung:", error);
+            showMusicPlaybackError(error.message || "Không thể mở video được chia sẻ.");
+        });
+        if (!sendMusicSignal({ action: "join" }) && musicShareStatus) {
+            musicShareStatus.textContent = "Không gửi được xác nhận tham gia. Hãy thử kết nối lại.";
         }
-        if (musicInviteBanner) musicInviteBanner.classList.remove("hidden");
         return;
     }
-    if (data.action === "decline" && data.sender === currentTargetUser) {
+    if (data.action === "decline" && (data.sender === currentTargetUser || currentRoom.startsWith("group_"))) {
         if (musicShareStatus) musicShareStatus.textContent = `${data.sender} chưa tham gia nghe/xem chung.`;
         outgoingMusicInvite = false;
         return;
     }
-    if (data.action === "join" && outgoingMusicInvite && data.sender === currentTargetUser) {
+    if (data.action === "join" && outgoingMusicInvite) {
         outgoingMusicInvite = false;
         musicSyncActive = true;
         musicSyncRoom = currentRoom;
-        musicSyncLeader = currentUsername;
+        musicSyncLeader = data.sender;
+        setSharedTheaterVisible(true);
         updateMusicShareControls();
         sendMusicState();
         return;
@@ -3613,7 +4371,10 @@ function handleMusicSyncEvent(data) {
                 musicInviteDescription.textContent = `${data.sender} đang phát “${data.title}”. Bạn có thể tham gia bất cứ lúc nào.`;
             }
         }
-        if (musicSyncActive && currentRoom === musicSyncRoom) applyRemoteMusicState(data);
+        if (musicSyncActive && currentRoom === musicSyncRoom) {
+            if (sharedTheaterTitle) sharedTheaterTitle.textContent = data.title || "YouTube";
+            applyRemoteMusicState(data);
+        }
         return;
     }
     if (data.action === "leave" && pendingMusicInvite?.sender === data.sender) {
@@ -3622,9 +4383,14 @@ function handleMusicSyncEvent(data) {
         return;
     }
     if (data.action === "leave" && musicSyncActive && currentRoom === musicSyncRoom) {
+        if (currentRoom.startsWith("group_")) {
+            if (musicShareStatus) musicShareStatus.textContent = `${data.sender} đã rời rạp xem chung.`;
+            return;
+        }
         musicSyncActive = false;
         musicSyncRoom = "";
         musicSyncLeader = "";
+        setSharedTheaterVisible(false);
         updateMusicShareControls();
         if (musicShareStatus) musicShareStatus.textContent = `${data.sender} đã rời phiên nghe/xem chung. Nhạc của bạn vẫn tiếp tục phát.`;
     }
@@ -3638,7 +4404,18 @@ if (musicShareButton) {
             return;
         }
         outgoingMusicInvite = true;
-        if (musicShareStatus) musicShareStatus.textContent = `Đã gửi lời mời nghe/xem chung cho ${currentTargetUser}.`;
+        if (!currentRoom.startsWith("group_")) {
+            musicSyncActive = true;
+            musicSyncRoom = currentRoom;
+            musicSyncLeader = currentUsername;
+        }
+        setSharedTheaterVisible(true);
+        updateMusicShareControls();
+        if (musicShareStatus) {
+            musicShareStatus.textContent = currentRoom.startsWith("group_") ?
+                "Đã mời thành viên đang trực tuyến trong nhóm xem chung." :
+                `Đã gửi lời mời nghe/xem chung cho ${currentTargetUser}.`;
+        }
     });
 }
 
@@ -3648,10 +4425,20 @@ if (musicLeaveShareButton) {
         musicSyncActive = false;
         musicSyncRoom = "";
         musicSyncLeader = "";
+        setSharedTheaterVisible(false);
         updateMusicShareControls();
         if (musicShareStatus) musicShareStatus.textContent = "Đã rời nghe/xem chung; nhạc của bạn vẫn tiếp tục phát.";
     });
 }
+
+sharedTheaterCollapseButton?.addEventListener("click", () => {
+    const collapsed = sharedTheaterPanel?.classList.toggle("is-collapsed") || false;
+    sharedTheaterCollapseButton.textContent = collapsed ? "Mở rộng" : "Thu nhỏ";
+    sharedTheaterCollapseButton.setAttribute("aria-expanded", String(!collapsed));
+});
+sharedTheaterLeaveButton?.addEventListener("click", () => musicLeaveShareButton?.click());
+sharedTheaterPlayPauseButton?.addEventListener("click", toggleSharedPlayback);
+sharedTheaterStopButton?.addEventListener("click", stopSharedPlayback);
 
 if (musicInviteAcceptButton) {
     musicInviteAcceptButton.addEventListener("click", () => {
@@ -3663,7 +4450,7 @@ if (musicInviteAcceptButton) {
         musicSyncRoom = currentRoom;
         musicSyncLeader = invite.sender;
         outgoingMusicInvite = false;
-        if (musicModal) musicModal.classList.remove("hidden");
+        setSharedTheaterVisible(true);
         const track = {
             key: `${invite.video_id || ""}:${invite.playlist_id || ""}`,
             videoId: invite.video_id || "",
@@ -3703,7 +4490,7 @@ window.setInterval(() => {
     const state = youtubePlayer.getPlayerState();
     if (
         musicSyncActive &&
-        now >= suppressMusicSyncUntil &&
+        !isPendingMusicPlaybackCommand() &&
         lastObservedMusicTime !== null &&
         state !== 1 &&
         Math.abs(position - lastObservedMusicTime) > 2
@@ -3807,10 +4594,8 @@ if (musicNextButton) {
 if (musicStopButton) {
     musicStopButton.addEventListener("click", () => {
         if (musicSyncActive) {
-            sendMusicSignal({
-                ...getMusicSnapshot("state"),
-                playback_state: "ended",
-            });
+            stopSharedPlayback();
+            return;
         }
         currentMusicIndex = -1;
         currentMusicTrack = null;

@@ -31,6 +31,7 @@ from starlette.websockets import WebSocketDisconnected
 from database import (
     database,
     chat_state_collection,
+    friend_request_collection,
     message_collection,
     perspective_topic_collection,
     user_collection,
@@ -69,6 +70,10 @@ if ADMIN_PASSWORD and (len(ADMIN_PASSWORD) < 8 or len(ADMIN_PASSWORD.encode("utf
 async def lifespan(_: FastAPI):
     try:
         await user_collection.create_index("username", unique=True)
+        await user_collection.create_index("phone", unique=True, sparse=True)
+        await friend_request_collection.create_index(
+            [("sender", 1), ("recipient", 1)], unique=True
+        )
         await message_collection.create_index([("room", 1), ("_id", -1)])
         await message_collection.create_index([("room", 1), ("sender", 1), ("_id", -1)])
         await world_pet_collection.create_index("room", unique=True)
@@ -170,17 +175,68 @@ class AuthSchema(BaseModel):
         return value
 
 
+def normalize_phone_number(value: str) -> str:
+    value = value.strip()
+    compact = re.sub(r"[\s().-]", "", value)
+    if compact.startswith("00"):
+        compact = f"+{compact[2:]}"
+    if compact.startswith("+"):
+        digits = compact[1:]
+    else:
+        digits = compact
+        if digits.startswith("0"):
+            digits = f"84{digits[1:]}"
+        elif len(digits) in {9, 10}:
+            digits = f"84{digits}"
+        elif digits.startswith("84"):
+            pass
+        else:
+            raise ValueError("Nhập số Việt Nam bắt đầu bằng 0 hoặc số quốc tế bắt đầu bằng +.")
+    if not digits.isdigit() or not 8 <= len(digits) <= 15 or digits.startswith("0"):
+        raise ValueError("Số điện thoại không hợp lệ.")
+    return f"+{digits}"
+
+
+class RegisterSchema(AuthSchema):
+    phone: str = Field(min_length=8, max_length=24)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone_number(value)
+
+
 class UpdateProfileSchema(BaseModel):
     bio: str = Field(default="", max_length=160)
     avatar_url: str = Field(default="", max_length=2048)
+    phone: str = Field(default="", max_length=24)
 
     @field_validator("avatar_url")
     @classmethod
     def validate_avatar_url(cls, value: str) -> str:
         value = value.strip()
-        if value and not value.startswith(("https://", "http://")):
+        uploaded_image = re.fullmatch(
+            r"/uploads/[a-f0-9]{32}\.(?:jpe?g|png|gif|webp)",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if value and not value.startswith(("https://", "http://")) and not uploaded_image:
             raise ValueError("Ảnh đại diện phải dùng địa chỉ HTTP hoặc HTTPS.")
         return value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone_number(value) if value.strip() else ""
+
+
+class FriendRequestSchema(BaseModel):
+    phone: str = Field(min_length=8, max_length=24)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone_number(value)
 
 
 class ResetPasswordSchema(BaseModel):
@@ -741,19 +797,22 @@ async def health():
 
 
 @app.post("/api/register")
-async def register(data: AuthSchema):
+async def register(data: RegisterSchema):
     if ADMIN_USERNAME and hmac.compare_digest(data.username, ADMIN_USERNAME):
         raise HTTPException(status_code=409, detail="Tài khoản quản trị được tạo từ cấu hình máy chủ.")
     try:
+        if await user_collection.find_one({"phone": data.phone}, {"_id": 1}):
+            raise HTTPException(status_code=409, detail="Số điện thoại đã được đăng ký.")
         await user_collection.insert_one({
             "username": data.username,
             "password": hash_password(data.password),
+            "phone": data.phone,
             "created_at": datetime.datetime.now(datetime.timezone.utc),
             "bio": "",
             "avatar_url": "",
         })
     except DuplicateKeyError as exc:
-        raise HTTPException(status_code=409, detail="Tài khoản đã tồn tại.") from exc
+        raise HTTPException(status_code=409, detail="Tên tài khoản hoặc số điện thoại đã được đăng ký.") from exc
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail="Không thể lưu tài khoản.") from exc
     return {"status": "ok", "message": "Đăng ký thành công!"}
@@ -808,6 +867,53 @@ async def get_messages(room: str, username: Annotated[str, Depends(get_current_u
         message["reactions"] = build_message_reaction_summary(message.get("reactions", {}))
     messages.reverse()
     return messages
+
+
+def build_shared_content(messages: list[dict]) -> dict[str, list[dict[str, str]]]:
+    images: list[dict[str, str]] = []
+    links: list[dict[str, str]] = []
+    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+    link_pattern = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, str) or message.get("is_deleted"):
+            continue
+        item = {
+            "id": str(message.get("_id", "")),
+            "sender": str(message.get("sender", "")),
+            "timestamp": str(message.get("timestamp", "")),
+        }
+        if content.startswith("/uploads/") and content.lower().endswith(image_extensions):
+            images.append({**item, "url": content})
+        for match in link_pattern.finditer(content):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            if url:
+                links.append({**item, "url": url})
+
+    return {"images": images, "links": links}
+
+
+@app.get("/api/messages/{room}/shared")
+async def get_shared_room_content(
+    room: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not await is_room_member(room, username):
+        raise HTTPException(status_code=403, detail="Bạn không thuộc cuộc trò chuyện này.")
+    query = {
+        "$and": [
+            {"$or": [{"room": room}, {"room_id": room}]},
+            {"is_deleted": {"$ne": True}},
+            {"content": {"$regex": r"^/uploads/|https?://", "$options": "i"}},
+        ]
+    }
+    try:
+        cursor = message_collection.find(query).sort("_id", -1).limit(1000)
+        messages = await cursor.to_list(length=1000)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải ảnh và liên kết đã chia sẻ.") from exc
+    return build_shared_content(messages)
 
 
 @app.get("/api/messages/{room}/search")
@@ -1260,7 +1366,7 @@ async def delete_world_memory(
 @app.get("/api/profile/{username}")
 async def get_profile(
     username: str,
-    _: Annotated[str, Depends(get_current_username)],
+    current_username: Annotated[str, Depends(get_current_username)],
 ):
     try:
         user = await user_collection.find_one(
@@ -1270,6 +1376,9 @@ async def get_profile(
         raise HTTPException(status_code=503, detail="Không thể tải hồ sơ.") from exc
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng.")
+    user.pop("password", None)
+    if username != current_username:
+        user.pop("phone", None)
     user["_id"] = str(user["_id"])
     if isinstance(user.get("created_at"), datetime.datetime):
         user["created_at"] = user["created_at"].strftime("%Y-%m-%d %H:%M")
@@ -1285,13 +1394,178 @@ async def update_profile(
     if username != current_username:
         raise HTTPException(status_code=403, detail="Bạn chỉ có thể cập nhật hồ sơ của mình.")
     try:
+        if data.phone and await user_collection.find_one(
+            {"phone": data.phone, "username": {"$ne": current_username}},
+            {"_id": 1},
+        ):
+            raise HTTPException(status_code=409, detail="Số điện thoại đã được tài khoản khác sử dụng.")
+        profile_updates = {"bio": data.bio.strip(), "avatar_url": data.avatar_url}
+        update_document = {"$set": profile_updates}
+        if data.phone:
+            profile_updates["phone"] = data.phone
+        else:
+            update_document["$unset"] = {"phone": ""}
         await user_collection.update_one(
             {"username": current_username},
-            {"$set": {"bio": data.bio.strip(), "avatar_url": data.avatar_url}},
+            update_document,
         )
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Số điện thoại đã được tài khoản khác sử dụng.") from exc
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail="Không thể cập nhật hồ sơ.") from exc
     return {"status": "ok", "message": "Cập nhật trang cá nhân thành công!"}
+
+
+@app.get("/api/friends/search")
+async def search_friend_by_phone(
+    phone: Annotated[str, Query(min_length=8, max_length=24)],
+    username: Annotated[str, Depends(get_current_username)],
+):
+    try:
+        normalized_phone = normalize_phone_number(phone)
+        user = await user_collection.find_one(
+            {"phone": normalized_phone},
+            {"username": 1, "avatar_url": 1, "bio": 1, "_id": 0},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tìm tài khoản.") from exc
+    if not user or user["username"] == username:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản với số điện thoại này.")
+    user.pop("phone", None)
+    return user
+
+
+@app.post("/api/friend-requests", status_code=201)
+async def send_friend_request(
+    data: FriendRequestSchema,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    try:
+        target = await user_collection.find_one(
+            {"phone": data.phone},
+            {"username": 1, "_id": 0},
+        )
+        if not target or target["username"] == username:
+            raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản với số điện thoại này.")
+        existing = await friend_request_collection.find_one({
+            "$or": [
+                {"sender": username, "recipient": target["username"]},
+                {"sender": target["username"], "recipient": username},
+            ],
+        })
+        if existing:
+            status = existing.get("status", "pending")
+            if status == "accepted":
+                raise HTTPException(status_code=409, detail="Hai bạn đã là bạn bè.")
+            if existing.get("recipient") == username:
+                raise HTTPException(status_code=409, detail="Người này đã gửi lời mời kết bạn cho bạn.")
+            raise HTTPException(status_code=409, detail="Bạn đã gửi lời mời kết bạn trước đó.")
+        await friend_request_collection.insert_one({
+            "sender": username,
+            "recipient": target["username"],
+            "status": "pending",
+            "created_at": datetime.datetime.now(datetime.timezone.utc),
+        })
+    except HTTPException:
+        raise
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Lời mời kết bạn đã được gửi trước đó.") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể gửi lời mời kết bạn.") from exc
+    return {"status": "ok", "username": target["username"]}
+
+
+@app.get("/api/friend-requests")
+async def get_friend_requests(
+    username: Annotated[str, Depends(get_current_username)],
+):
+    try:
+        requests = await friend_request_collection.find({
+            "recipient": username,
+            "status": "pending",
+        }).sort("created_at", -1).to_list(length=200)
+        results = []
+        for request in requests:
+            sender = await user_collection.find_one(
+                {"username": request["sender"]},
+                {"username": 1, "avatar_url": 1, "bio": 1, "_id": 0},
+            )
+            if sender:
+                results.append({
+                    "id": str(request["_id"]),
+                    **sender,
+                })
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải lời mời kết bạn.") from exc
+    return results
+
+
+@app.get("/api/friends")
+async def get_friends(username: Annotated[str, Depends(get_current_username)]):
+    try:
+        requests = await friend_request_collection.find({
+            "status": "accepted",
+            "$or": [{"sender": username}, {"recipient": username}],
+        }).to_list(length=5000)
+        friends = []
+        for request in requests:
+            friend_username = (
+                request["recipient"] if request["sender"] == username else request["sender"]
+            )
+            friend = await user_collection.find_one(
+                {"username": friend_username},
+                {"username": 1, "avatar_url": 1, "bio": 1, "_id": 0},
+            )
+            if friend:
+                friends.append(friend)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể tải danh sách bạn bè.") from exc
+    return friends
+
+
+@app.post("/api/friend-requests/{request_id}/accept")
+async def accept_friend_request(
+    request_id: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not ObjectId.is_valid(request_id):
+        raise HTTPException(status_code=400, detail="Mã lời mời không hợp lệ.")
+    try:
+        result = await friend_request_collection.update_one(
+            {
+                "_id": ObjectId(request_id),
+                "recipient": username,
+                "status": "pending",
+            },
+            {"$set": {"status": "accepted"}},
+        )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể chấp nhận lời mời.") from exc
+    if not result.modified_count:
+        raise HTTPException(status_code=404, detail="Lời mời không còn tồn tại.")
+    return {"status": "ok"}
+
+
+@app.delete("/api/friend-requests/{request_id}")
+async def decline_friend_request(
+    request_id: str,
+    username: Annotated[str, Depends(get_current_username)],
+):
+    if not ObjectId.is_valid(request_id):
+        raise HTTPException(status_code=400, detail="Mã lời mời không hợp lệ.")
+    try:
+        result = await friend_request_collection.delete_one({
+            "_id": ObjectId(request_id),
+            "recipient": username,
+            "status": "pending",
+        })
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Không thể từ chối lời mời.") from exc
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="Lời mời không còn tồn tại.")
+    return {"status": "ok"}
 
 
 @app.get("/api/admin/users")
@@ -2472,12 +2746,18 @@ async def websocket_endpoint(
                     if not await manager.send_to_user_in_room(room, target, event):
                         await send_socket_error(websocket, "Người tham gia đã ngắt kết nối.")
             elif msg_type == "music_sync":
-                if room.startswith("group_"):
-                    await send_socket_error(websocket, "Nghe/xem chung hiện chỉ hỗ trợ cuộc trò chuyện riêng.")
-                    continue
                 action = data.get("action")
                 if not isinstance(action, str) or action not in {"invite", "join", "decline", "state", "leave"}:
                     await send_socket_error(websocket, "Thao tác nghe/xem chung không hợp lệ.")
+                    continue
+                if action == "invite" and not any(
+                    online_username != username
+                    for online_username in await manager.online_users(room)
+                ):
+                    await send_socket_error(
+                        websocket,
+                        "Cần có ít nhất một thành viên đang mở cuộc trò chuyện này để nhận lời mời nghe/xem chung.",
+                    )
                     continue
                 event = {"type": "music_sync", "action": action, "sender": username}
                 if action in {"invite", "state"}:
@@ -2850,18 +3130,25 @@ async def get_uploaded_file(
     ):
         raise HTTPException(status_code=404, detail="Không tìm thấy tệp.")
     file_path = UPLOAD_DIR / filename
+    upload_url = f"/uploads/{filename}"
     try:
-        message = await message_collection.find_one(
-            {
-                "content": f"/uploads/{filename}",
-                "$or": [{"room": {"$exists": True}}, {"room_id": {"$exists": True}}],
-            },
-            {"room": 1, "room_id": 1},
-        )
+        avatar_owner = await user_collection.find_one({"avatar_url": upload_url}, {"_id": 1})
+        message = None
+        if not avatar_owner:
+            message = await message_collection.find_one(
+                {
+                    "content": upload_url,
+                    "$or": [{"room": {"$exists": True}}, {"room_id": {"$exists": True}}],
+                },
+                {"room": 1, "room_id": 1},
+            )
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail="Không thể xác thực quyền xem tệp.") from exc
     room = message.get("room", message.get("room_id", "")) if message else ""
-    if not message or not await is_room_member(room, username) or not file_path.is_file():
+    is_authorized = bool(avatar_owner) or (
+        bool(message) and await is_room_member(room, username)
+    )
+    if not is_authorized or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Không tìm thấy tệp.")
     media_type = {
         ".jpeg": "image/jpeg",

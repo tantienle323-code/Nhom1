@@ -23,6 +23,7 @@ database = client["chat_db"]
 
 # Khai báo các collection
 user_collection = database.get_collection("users")
+friend_request_collection = database.get_collection("friend_requests")
 message_collection = database.get_collection("messages")
 room_collection = database.get_collection("rooms")
 world_memory_collection = database.get_collection("world_memories")

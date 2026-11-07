@@ -14,6 +14,30 @@ import main
 
 
 class AuthTests(unittest.TestCase):
+    def test_registration_normalizes_vietnamese_phone_number(self):
+        registration = main.RegisterSchema(
+            username="alice",
+            password="password123",
+            phone="0912 345 678",
+        )
+        self.assertEqual(registration.phone, "+84912345678")
+
+    def test_registration_rejects_invalid_phone_number(self):
+        with self.assertRaises(ValidationError):
+            main.RegisterSchema(username="alice", password="password123", phone="not-a-phone")
+
+    def test_profile_normalizes_phone_number(self):
+        profile = main.UpdateProfileSchema(phone="+84 (912) 345-678")
+        self.assertEqual(profile.phone, "+84912345678")
+
+    def test_profile_accepts_uploaded_image_avatar_path(self):
+        profile = main.UpdateProfileSchema(avatar_url=f"/uploads/{'a' * 32}.png")
+        self.assertEqual(profile.avatar_url, f"/uploads/{'a' * 32}.png")
+
+    def test_profile_rejects_untrusted_local_avatar_path(self):
+        with self.assertRaises(ValidationError):
+            main.UpdateProfileSchema(avatar_url="/uploads/avatar.png")
+
     def test_password_hash_preserves_whitespace(self):
         hashed = main.hash_password("password with spaces ")
         self.assertTrue(main.verify_password("password with spaces ", hashed))
@@ -61,6 +85,128 @@ class AuthTests(unittest.TestCase):
 
 
 class ChatUpgradeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_friend_search_returns_no_phone_number(self):
+        class Users:
+            async def find_one(self, query, projection):
+                self.query = query
+                self.projection = projection
+                return {"username": "bob", "phone": "+84912345678", "bio": "Hello"}
+
+        users = Users()
+        with patch.object(main, "user_collection", users):
+            result = await main.search_friend_by_phone("+84 912 345 678", "alice")
+        self.assertEqual(result["username"], "bob")
+        self.assertNotIn("phone", result)
+        self.assertEqual(users.query, {"phone": "+84912345678"})
+
+    async def test_friend_search_does_not_find_self(self):
+        class Users:
+            async def find_one(self, *_):
+                return {"username": "alice", "bio": ""}
+
+        with patch.object(main, "user_collection", Users()):
+            with self.assertRaises(HTTPException) as error:
+                await main.search_friend_by_phone("0912345678", "alice")
+        self.assertEqual(error.exception.status_code, 404)
+
+    async def test_profile_only_returns_phone_to_the_owner(self):
+        class Users:
+            async def find_one(self, *_):
+                return {
+                    "_id": "user-id",
+                    "username": "alice",
+                    "phone": "+84912345678",
+                    "password": "hashed",
+                }
+
+        with patch.object(main, "user_collection", Users()):
+            own_profile = await main.get_profile("alice", "alice")
+            other_profile = await main.get_profile("alice", "bob")
+        self.assertEqual(own_profile["phone"], "+84912345678")
+        self.assertNotIn("phone", other_profile)
+        self.assertNotIn("password", other_profile)
+
+    async def test_friend_request_is_created_for_exact_phone_match(self):
+        class Users:
+            async def find_one(self, query, projection):
+                self.query = query
+                return {"username": "bob"}
+
+        class Requests:
+            async def find_one(self, query):
+                self.existing_query = query
+                return None
+
+            async def insert_one(self, data):
+                self.inserted = data
+
+        users = Users()
+        requests = Requests()
+        with (
+            patch.object(main, "user_collection", users),
+            patch.object(main, "friend_request_collection", requests),
+        ):
+            result = await main.send_friend_request(
+                main.FriendRequestSchema(phone="0912345678"),
+                "alice",
+            )
+        self.assertEqual(result, {"status": "ok", "username": "bob"})
+        self.assertEqual(users.query, {"phone": "+84912345678"})
+        self.assertEqual(requests.inserted["sender"], "alice")
+        self.assertEqual(requests.inserted["recipient"], "bob")
+        self.assertEqual(requests.inserted["status"], "pending")
+
+    async def test_shared_content_is_member_scoped_and_extracts_images_and_links(self):
+        class Cursor:
+            def sort(self, *_):
+                return self
+
+            def limit(self, *_):
+                return self
+
+            async def to_list(self, length):
+                return [
+                    {
+                        "_id": "image-1",
+                        "sender": "bob",
+                        "timestamp": "12:30",
+                        "content": "/uploads/photo.JPG",
+                    },
+                    {
+                        "_id": "link-1",
+                        "sender": "alice",
+                        "timestamp": "12:31",
+                        "content": "Xem nhé https://example.com/page.",
+                    },
+                    {
+                        "_id": "deleted-1",
+                        "content": "https://example.com/deleted",
+                        "is_deleted": True,
+                    },
+                ]
+
+        class Messages:
+            def find(self, query):
+                self.query = query
+                return Cursor()
+
+        messages = Messages()
+        with (
+            patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
+            patch.object(main, "message_collection", messages),
+        ):
+            result = await main.get_shared_room_content("chat_alice_bob", "alice")
+
+        self.assertEqual(result["images"][0]["url"], "/uploads/photo.JPG")
+        self.assertEqual(result["links"][0]["url"], "https://example.com/page")
+        self.assertIn({"room": "chat_alice_bob"}, messages.query["$and"][0]["$or"])
+
+    async def test_shared_content_rejects_non_members(self):
+        with patch.object(main, "is_room_member", new=AsyncMock(return_value=False)):
+            with self.assertRaises(HTTPException) as error:
+                await main.get_shared_room_content("group_private", "alice")
+        self.assertEqual(error.exception.status_code, 403)
+
     async def test_message_rate_limit_caps_room_user_pair(self):
         key = ("group_rate_test", "alice")
         main.message_rate_events.pop(key, None)
@@ -1016,6 +1162,10 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_uploaded_media_requires_chat_membership(self):
         filename = f"{'a' * 32}.png"
 
+        class Users:
+            async def find_one(self, *_):
+                return None
+
         class Messages:
             async def find_one(self, query, projection):
                 self.query = query
@@ -1026,6 +1176,7 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
             file_path.write_bytes(b"png")
             with (
                 patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "user_collection", Users()),
                 patch.object(main, "message_collection", Messages()),
                 patch.object(main, "is_room_member", new=AsyncMock(return_value=False)),
             ):
@@ -1036,6 +1187,10 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_uploaded_media_returns_private_no_store_response_for_member(self):
         filename = f"{'b' * 32}.png"
 
+        class Users:
+            async def find_one(self, *_):
+                return None
+
         class Messages:
             async def find_one(self, query, projection):
                 return {"room": "group_123"}
@@ -1044,12 +1199,37 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
             (Path(directory) / filename).write_bytes(b"png")
             with (
                 patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "user_collection", Users()),
                 patch.object(main, "message_collection", Messages()),
                 patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
             ):
                 response = await main.get_uploaded_file(filename, "alice")
         self.assertEqual(response.media_type, "image/png")
         self.assertEqual(response.headers["cache-control"], "private, no-store")
+
+    async def test_uploaded_avatar_is_available_to_authenticated_users(self):
+        filename = f"{'c' * 32}.png"
+
+        class Users:
+            async def find_one(self, query, projection):
+                self.query = query
+                return {"username": "alice"}
+
+        class Messages:
+            async def find_one(self, *_):
+                raise AssertionError("Avatar uploads should not require a chat message.")
+
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / filename).write_bytes(b"png")
+            with (
+                patch.object(main, "UPLOAD_DIR", Path(directory)),
+                patch.object(main, "user_collection", Users()),
+                patch.object(main, "message_collection", Messages()),
+                patch.object(main, "is_room_member", new=AsyncMock()) as is_room_member,
+            ):
+                response = await main.get_uploaded_file(filename, "bob")
+        self.assertEqual(response.media_type, "image/png")
+        is_room_member.assert_not_awaited()
 
     async def test_api_routes_are_registered_before_frontend_fallback(self):
         route_names = [getattr(route, "name", "") for route in main.app.routes]
@@ -1070,6 +1250,15 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.events = []
                 self.incoming = [
+                    {
+                        "type": "music_sync",
+                        "action": "invite",
+                        "video_id": "abcdefghijk",
+                        "playlist_id": "",
+                        "title": "Shared video",
+                        "position": 3.5,
+                        "playback_state": "playing",
+                    },
                     {
                         "type": "music_sync",
                         "action": "invite",
@@ -1107,10 +1296,16 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
                 return {"username": "alice"}
 
         socket = FakeSocket()
+        manager = main.ConnectionManager()
         with (
             patch.object(main, "user_collection", Users()),
             patch.object(main, "is_room_member", new=AsyncMock(return_value=True)),
-            patch.object(main, "manager", main.ConnectionManager()),
+            patch.object(main, "manager", manager),
+            patch.object(
+                manager,
+                "online_users",
+                new=AsyncMock(side_effect=[["alice"], ["alice", "bob"], ["alice"]]),
+            ),
         ):
             await main.websocket_endpoint(socket, "chat_alice_bob", "alice")
 
@@ -1119,6 +1314,11 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invitation["sender"], "alice")
         self.assertEqual(invitation["video_id"], "abcdefghijk")
         self.assertEqual(invitation["position"], 3.5)
+        self.assertTrue(any(
+            event.get("message", "").startswith("Cần có ít nhất một thành viên đang mở cuộc trò chuyện")
+            for event in socket.events
+            if event.get("type") == "error"
+        ))
         self.assertTrue(any(event.get("type") == "error" for event in socket.events))
 
     async def test_private_chat_forwards_playback_state_and_rejects_invalid_timing(self):
@@ -1181,7 +1381,7 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["position"], 42)
         self.assertTrue(any(event.get("type") == "error" for event in socket.events))
 
-    async def test_group_rooms_cannot_broadcast_shared_music(self):
+    async def test_group_rooms_broadcast_shared_music_to_connected_members(self):
         token = main.create_access_token("alice")
 
         class FakeSocket:
@@ -1189,7 +1389,26 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
 
             def __init__(self):
                 self.events = []
-                self.incoming = [{"type": "music_sync", "action": "invite"}]
+                self.incoming = [
+                    {
+                        "type": "music_sync",
+                        "action": "invite",
+                        "video_id": "abcdefghijk",
+                        "playlist_id": "",
+                        "title": "Group watch party",
+                        "position": 5,
+                        "playback_state": "playing",
+                    },
+                    {
+                        "type": "music_sync",
+                        "action": "state",
+                        "video_id": "invalid",
+                        "playlist_id": "",
+                        "title": "Group watch party",
+                        "position": 5,
+                        "playback_state": "playing",
+                    },
+                ]
 
             async def accept(self, subprotocol):
                 pass
@@ -1220,13 +1439,24 @@ class SharedMusicTests(unittest.IsolatedAsyncioTestCase):
                 return Groups()
 
         socket = FakeSocket()
+        manager = main.ConnectionManager()
+        manager.online_users = AsyncMock(side_effect=[["alice"], ["alice", "bob"]])
+        manager.broadcast_to_room = AsyncMock()
         with (
             patch.object(main, "database", Database()),
             patch.object(main, "user_collection", Users()),
-            patch.object(main, "manager", main.ConnectionManager()),
+            patch.object(main, "manager", manager),
         ):
             await main.websocket_endpoint(socket, "group_test", "alice")
 
+        shared_event = next(
+            call.args[1]
+            for call in manager.broadcast_to_room.await_args_list
+            if call.args[1].get("type") == "music_sync"
+        )
+        self.assertEqual(shared_event["action"], "invite")
+        self.assertEqual(shared_event["sender"], "alice")
+        self.assertEqual(shared_event["video_id"], "abcdefghijk")
         self.assertTrue(any(event.get("type") == "error" for event in socket.events))
         self.assertFalse(any(event.get("type") == "music_sync" for event in socket.events))
 

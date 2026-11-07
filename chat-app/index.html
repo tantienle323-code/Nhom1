@@ -2,9 +2,9 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261108-header-row-alignment-v5">
+    <link rel="stylesheet" href="style.css?v=20261108-shared-player-fix-v20">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
@@ -37,6 +37,10 @@
                         <span>Tên tài khoản</span>
                         <input type="text" id="username-input" placeholder="Nhập tên tài khoản" autocomplete="username" autocapitalize="off" minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]{3,30}" title="Dùng 3-30 chữ cái không dấu, chữ số, dấu chấm, gạch ngang hoặc gạch dưới." required />
                     </label>
+                    <label class="auth-field auth-phone-field hidden">
+                        <span>Số điện thoại</span>
+                        <input type="tel" id="phone-input" placeholder="Số điện thoại, ví dụ 0912345678" autocomplete="tel" inputmode="tel" maxlength="24" />
+                    </label>
                     <label class="auth-field">
                         <span>Mật khẩu</span>
                         <input type="password" id="password-input" placeholder="Nhập mật khẩu" autocomplete="current-password" minlength="8" maxlength="72" required />
@@ -54,6 +58,24 @@
 
     <!-- Giao diện chat -->
     <div id="chat-screen" class="tg-layout hidden">
+        <nav class="app-rail" aria-label="Điều hướng chính">
+            <button id="app-rail-avatar-button" class="app-rail-avatar" type="button" aria-label="Mở hồ sơ cá nhân" title="Hồ sơ cá nhân">
+                <img id="app-rail-avatar" src="https://via.placeholder.com/44" alt="" />
+            </button>
+            <button class="app-rail-button active" type="button" aria-label="Cuộc trò chuyện" title="Cuộc trò chuyện">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-6.5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 10h8M8 13h5"/></svg>
+            </button>
+            <span class="app-rail-divider"></span>
+            <button id="rail-files-btn" class="app-rail-button" type="button" aria-label="Ảnh và tệp đã chia sẻ" title="Ảnh và tệp đã chia sẻ">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5Z"/><path d="M4 5.5v15M8 7h8M8 10h6"/></svg>
+            </button>
+            <button id="rail-create-group-btn" class="app-rail-button" type="button" aria-label="Tìm và kết bạn bằng số điện thoại" title="Tìm bạn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19v-1a5.5 5.5 0 0 1 11 0v1M18 8v6M15 11h6"/></svg>
+            </button>
+            <button id="rail-settings-btn" class="app-rail-button app-rail-settings" type="button" aria-label="Cài đặt tài khoản" title="Cài đặt tài khoản">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.4 15 .1.1 1.4 1.1-1.5 2.6-1.7-.7a8 8 0 0 1-1.5.9l-.3 1.8h-3l-.3-1.8a8 8 0 0 1-1.5-.9l-1.7.7-1.5-2.6 1.4-1.1a7 7 0 0 1 0-1.8l-1.4-1.1 1.5-2.6 1.7.7a8 8 0 0 1 1.5-.9l.3-1.8h3l.3 1.8a8 8 0 0 1 1.5.9l1.7-.7 1.5 2.6-1.4 1.1a7 7 0 0 1 0 1.7Z"/></svg>
+            </button>
+        </nav>
         <header class="tg-topbar">
             <div class="tg-topbar-brand">
                 <div class="tg-sidebar-brand">
@@ -66,19 +88,19 @@
                         <p>Không gian kết nối riêng tư</p>
                     </div>
                 </div>
-                <button id="my-profile-modal-btn" class="tg-menu-btn" type="button" title="Cài đặt cá nhân" aria-label="Cài đặt cá nhân">☰</button>
+                <button id="my-profile-modal-btn" class="tg-menu-btn" type="button" title="Hồ sơ cá nhân" aria-label="Hồ sơ cá nhân">☰</button>
             </div>
             <div class="tg-topbar-search">
                 <div class="tg-search-wrapper">
                     <input type="text" placeholder="Lọc cuộc trò chuyện..." aria-label="Lọc cuộc trò chuyện" />
                 </div>
-                <button id="message-search-open-btn" class="tg-btn-icon tg-search-action" type="button" title="Tìm tin nhắn trong cuộc trò chuyện" aria-label="Tìm tin nhắn">⌕</button>
-                <button id="open-create-group-btn" class="tg-btn-icon" type="button" title="Tạo nhóm mới" aria-label="Tạo nhóm mới">＋</button>
+                <button id="message-search-open-btn" class="tg-btn-icon tg-search-action" type="button" title="Tìm tin nhắn trong cuộc trò chuyện" aria-label="Tìm tin nhắn"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg></button>
+                <button id="open-create-group-btn" class="tg-btn-icon" type="button" title="Tạo nhóm mới" aria-label="Tạo nhóm mới"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             </div>
 
             <div class="tg-chat-header">
                 <div class="tg-header-info">
-                    <button id="back-users-btn" class="tg-icon-btn back-users-btn" type="button" aria-label="Danh sách cuộc trò chuyện">←</button>
+                    <button id="back-users-btn" class="tg-icon-btn back-users-btn" type="button" aria-label="Quay lại danh sách để chọn người khác" title="Quay lại danh sách trò chuyện">←</button>
                     <img id="header-avatar" src="https://via.placeholder.com/40" class="tg-avatar" alt="" />
                     <div class="tg-chat-identity">
                         <h4 id="header-name">Chọn cuộc trò chuyện</h4>
@@ -86,13 +108,14 @@
                     </div>
                 </div>
                 <div class="header-actions">
-                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" title="Gọi video" disabled>📹 Gọi</button>
-                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Mở thế giới chung và thú cưng" title="Thú cưng chung" disabled>🐾 Thú cưng chung</button>
-                    <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" title="Đổi góc nhìn" disabled>🪞 Đổi góc nhìn</button>
-                    <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc" title="Nhạc">🎵 Nhạc</button>
+                    <button id="header-contacts-btn" class="tg-icon-btn" type="button" aria-label="Tìm bạn bằng số điện thoại" title="Tìm bạn"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 20v-1.5A5.5 5.5 0 0 1 9 13h1a5.5 5.5 0 0 1 5.5 5.5V20M18 8v6M15 11h6"/></svg></button>
+                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" title="Gọi video" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="3"/><path d="m15 10 6-3v10l-6-3"/></svg></button>
+                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Mở thế giới chung và thú cưng" title="Thú cưng chung" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.3-7-10a3.8 3.8 0 0 1 7-2 3.8 3.8 0 0 1 7 2c0 5.7-7 10-7 10Z"/><path d="M8.5 12h2l1-2 1.5 4 1-2h1.5"/></svg></button>
+                    <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" title="Đổi góc nhìn" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-6 9-6 9 6 9 6-3.2 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/><path d="m16.5 5.5 2 2"/></svg></button>
+                    <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc" title="Nhạc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+                    <button id="conversation-info-btn" class="tg-icon-btn conversation-info-btn" type="button" aria-label="Xem ảnh, liên kết và thành viên" title="Ảnh, liên kết và thành viên" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg></button>
                     <a class="tg-admin-link tg-game-link" href="arcade.html" target="_blank" rel="noopener" aria-label="Chơi game" title="Chơi game">🎮 Chơi game</a>
                     <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
-                    <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất" aria-label="Đăng xuất">🚪</button>
                 </div>
             </div>
         </header>
@@ -116,6 +139,24 @@
 
         <!-- CỘT PHẢI: KHUNG CHAT CHÍNH -->
         <main class="tg-chat-main">
+            <section id="shared-theater-panel" class="shared-theater-panel hidden" aria-label="Rạp xem chung">
+                <header class="shared-theater-header">
+                    <div class="shared-theater-heading">
+                        <span class="shared-theater-icon" aria-hidden="true">▶</span>
+                        <div>
+                            <strong>Rạp xem chung</strong>
+                            <span id="shared-theater-title">Đang chờ video...</span>
+                        </div>
+                    </div>
+                    <div class="shared-theater-actions">
+                        <button id="shared-theater-play-pause-btn" type="button" aria-label="Phát hoặc tạm dừng">▶ Phát</button>
+                        <button id="shared-theater-stop-btn" type="button" aria-label="Dừng phát">■ Dừng</button>
+                        <button id="shared-theater-collapse-btn" type="button" aria-expanded="true">Thu nhỏ</button>
+                        <button id="shared-theater-leave-btn" type="button">Rời xem chung</button>
+                    </div>
+                </header>
+                <div id="shared-theater-screen" class="shared-theater-screen"></div>
+            </section>
             <div class="tg-messages-container" id="messages-container">
                 <section class="chat-welcome" aria-labelledby="chat-welcome-title">
                     <div class="welcome-visual" aria-hidden="true">
@@ -155,15 +196,15 @@
                     <button id="reply-composer-cancel" type="button" aria-label="Hủy trả lời">×</button>
                 </div>
                 <input type="file" id="file-input" accept="image/*,video/*,audio/*" style="display: none;" />
-                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh, video hoặc âm thanh" aria-label="Gửi ảnh, video hoặc âm thanh" onclick="document.getElementById('file-input').click()">📎</button>
-                <button id="voice-record-btn" class="tg-icon-btn" type="button" title="Ghi tin nhắn thoại" aria-label="Ghi tin nhắn thoại">🎙️</button>
-                <button id="open-camera-btn" class="tg-icon-btn" type="button" title="Chụp ảnh trực tiếp" aria-label="Chụp ảnh trực tiếp">📷</button>
+                <button id="attach-btn" class="tg-icon-btn" type="button" title="Gửi ảnh, video hoặc âm thanh" aria-label="Gửi ảnh, video hoặc âm thanh" onclick="document.getElementById('file-input').click()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12.5 6.8-6.8a3.2 3.2 0 0 1 4.5 4.5l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.1-8.1"/><path d="m7.5 16.5 8-8"/></svg></button>
+                <button id="voice-record-btn" class="tg-icon-btn" type="button" title="Ghi tin nhắn thoại" aria-label="Ghi tin nhắn thoại"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg></button>
+                <button id="open-camera-btn" class="tg-icon-btn" type="button" title="Chụp ảnh trực tiếp" aria-label="Chụp ảnh trực tiếp"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3v12H4Z"/><circle cx="12" cy="13" r="4"/></svg></button>
                 <div class="tg-message-composer">
                     <div id="emoji-picker" class="emoji-picker hidden" role="group" aria-label="Chọn emoji"></div>
                     <input type="text" id="message-input" placeholder="Viết tin nhắn..." />
                 </div>
-                <button id="emoji-picker-btn" class="tg-icon-btn" type="button" title="Chèn emoji" aria-label="Mở bảng emoji" aria-expanded="false" aria-controls="emoji-picker">😊</button>
-                <button id="send-btn" class="tg-send-btn" type="button" aria-label="Gửi tin nhắn">✈️</button>
+                <button id="emoji-picker-btn" class="tg-icon-btn" type="button" title="Chèn emoji" aria-label="Mở bảng emoji" aria-expanded="false" aria-controls="emoji-picker"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 2 3.5 2 3.5-2 3.5-2M9 9.5h.01M15 9.5h.01"/></svg></button>
+                <button id="send-btn" class="tg-send-btn" type="button" aria-label="Gửi tin nhắn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 3-7.5 18-3.2-7.3L3 10.5Z"/><path d="M21 3 10.3 13.7"/></svg></button>
             </div>
         </main>
         </div>
@@ -192,17 +233,62 @@
     <!-- MODAL PROFILE/SETTINGS (TELEGRAM STYLE) -->
     <div id="profile-modal" class="modal-overlay hidden">
         <div class="tg-modal-card">
-            <h3>⚙️ Cài đặt tài khoản</h3>
+            <h3>👤 Hồ sơ &amp; cài đặt tài khoản</h3>
             <div class="tg-form-group">
-                <label>Tài khoản: <b id="profile-username" style="color: #5288c1;"></b></label>
-                <input type="text" id="profile-avatar-input" placeholder="URL Ảnh đại diện..." />
+                <label>Tên tài khoản: <b id="profile-username" style="color: #5288c1;"></b></label>
+                <label for="profile-phone-input">Số điện thoại</label>
+                <input type="tel" id="profile-phone-input" autocomplete="tel" inputmode="tel" maxlength="24" placeholder="Nhập số điện thoại để bạn bè tìm thấy bạn" />
+                <div class="profile-avatar-picker">
+                    <img id="profile-avatar-preview" src="https://via.placeholder.com/64" alt="Ảnh đại diện hiện tại" />
+                    <div class="profile-avatar-picker-controls">
+                        <label class="profile-avatar-file-label" for="profile-avatar-file">Chọn ảnh từ máy</label>
+                        <input type="file" id="profile-avatar-file" accept="image/jpeg,image/png,image/gif,image/webp" hidden />
+                        <span id="profile-avatar-file-name" aria-live="polite">JPG, PNG, GIF hoặc WebP</span>
+                    </div>
+                </div>
+                <input type="url" id="profile-avatar-input" placeholder="Hoặc nhập URL ảnh đại diện..." />
                 <input type="text" id="profile-bio-input" placeholder="Mô tả tiểu sử..." />
             </div>
             <div class="tg-modal-actions">
+                <button id="logout-btn" class="btn-cancel profile-logout-btn" type="button">ĐĂNG XUẤT</button>
                 <button id="save-profile-btn" class="btn-telegram">LƯU</button>
                 <button id="close-profile-btn" class="btn-cancel">HỦY</button>
             </div>
         </div>
+    </div>
+
+    <div id="contacts-modal" class="modal-overlay hidden">
+        <section class="friends-modal-card" role="dialog" aria-modal="true" aria-labelledby="contacts-title">
+            <button id="contacts-close-btn" class="world-close-btn" type="button" aria-label="Đóng">×</button>
+            <p class="world-eyebrow">KẾT NỐI BẠN BÈ</p>
+            <div class="contacts-view-tabs" role="tablist" aria-label="Danh bạ và tìm bạn">
+                <button id="contacts-directory-tab" class="active" type="button" role="tab" aria-selected="true">Danh bạ</button>
+                <button id="contacts-search-tab" type="button" role="tab" aria-selected="false">Tìm bạn</button>
+            </div>
+            <section id="friends-directory-view" class="contacts-view" role="tabpanel" aria-labelledby="contacts-directory-tab">
+                <h2 id="contacts-title">Danh bạ bạn bè</h2>
+                <section class="friend-list-section">
+                    <h3>Lời mời kết bạn</h3>
+                    <div id="friend-requests-list" class="friend-items-list"></div>
+                </section>
+                <section class="friend-list-section">
+                    <h3>Bạn bè</h3>
+                    <div id="friends-list" class="friend-items-list"></div>
+                </section>
+            </section>
+            <section id="friends-search-view" class="contacts-view hidden" role="tabpanel" aria-labelledby="contacts-search-tab">
+                <h2>Tìm bạn bằng số điện thoại</h2>
+                <form id="friend-search-form" class="friend-search-form">
+                    <label for="friend-phone-search">Số điện thoại</label>
+                    <div>
+                        <input id="friend-phone-search" type="tel" inputmode="tel" autocomplete="tel" placeholder="Nhập số điện thoại" required />
+                        <button class="btn-telegram" type="submit">Tìm kiếm</button>
+                    </div>
+                </form>
+                <p id="friend-search-status" class="friend-search-status" aria-live="polite"></p>
+                <div id="friend-search-result" class="friend-search-result hidden"></div>
+            </section>
+        </section>
     </div>
 
     <div id="world-modal" class="modal-overlay hidden">
@@ -373,7 +459,7 @@
             <div class="music-share-controls">
                 <button id="music-share-btn" type="button" disabled>👥 Mời nghe/xem chung</button>
                 <button id="music-leave-share-btn" class="hidden" type="button">Ngừng nghe/xem chung</button>
-                <p id="music-share-status" role="status">Chọn một cuộc trò chuyện riêng và phát YouTube để mời đối phương.</p>
+                <p id="music-share-status" role="status">Chọn một cuộc trò chuyện và phát YouTube để mở rạp xem chung cho mọi người.</p>
             </div>
             <a class="music-game-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game ở tab mới — giữ nhạc tiếp tục phát</a>
             <div class="music-playlist-heading"><h3>Danh sách phát</h3><span id="music-track-count">0 bài</span></div>
@@ -420,6 +506,47 @@
         </section>
     </div>
 
+    <aside id="conversation-info-modal" class="conversation-info-card conversation-info-sidebar" aria-label="Thông tin cuộc trò chuyện">
+        <section class="conversation-info-content">
+            <header class="conversation-info-heading">
+                <div>
+                    <p class="world-eyebrow">THÔNG TIN HỘI THOẠI</p>
+                    <h2 id="conversation-info-title">Chưa chọn cuộc trò chuyện</h2>
+                </div>
+                <button id="conversation-info-close-btn" class="world-close-btn" type="button" aria-label="Đóng thông tin">×</button>
+            </header>
+            <div class="conversation-profile-summary">
+                <img id="conversation-info-avatar" src="https://via.placeholder.com/64" alt="" />
+                <strong id="conversation-info-name">Chọn một cuộc trò chuyện</strong>
+                <small id="conversation-info-status">Thông tin và nội dung đã chia sẻ</small>
+            </div>
+            <div class="conversation-quick-actions" aria-label="Thao tác nhanh">
+                <button id="conversation-quick-call" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-2l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg><span>Gọi</span></button>
+                <button id="conversation-quick-pin" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-4 1-4 4-1 7-2-2-2-2-2-2-2-2 7-1 4-4Z"/></svg><span>Ghim</span></button>
+                <button id="conversation-quick-members" class="hidden" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 20v-1.5A5.5 5.5 0 0 1 9 13h1a5.5 5.5 0 0 1 5.5 5.5V20M17 5a3 3 0 0 1 0 6M18 14a4.5 4.5 0 0 1 3 4v2"/></svg><span>Thành viên</span></button>
+                <button id="conversation-quick-world" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.3-7-10a3.8 3.8 0 0 1 7-2 3.8 3.8 0 0 1 7 2c0 5.7-7 10-7 10Z"/></svg><span>Thế giới</span></button>
+                <button id="conversation-quick-perspective" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12s3.2-6 9-6 9 6 9 6-3.2 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/></svg><span>Góc nhìn</span></button>
+            </div>
+            <div class="conversation-info-section-heading"><h3>Ảnh &amp; liên kết</h3></div>
+            <div class="conversation-info-tabs" role="tablist" aria-label="Nội dung cuộc trò chuyện">
+                <button id="shared-images-tab" class="active" type="button" role="tab" aria-selected="true" aria-controls="shared-images-panel" data-info-tab="images">Ảnh</button>
+                <button id="shared-links-tab" type="button" role="tab" aria-selected="false" aria-controls="shared-links-panel" data-info-tab="links">Liên kết</button>
+                <button id="shared-members-tab" class="hidden" type="button" role="tab" aria-selected="false" aria-controls="shared-members-panel" data-info-tab="members">Thành viên</button>
+            </div>
+            <div id="shared-images-panel" class="conversation-info-panel" role="tabpanel" aria-labelledby="shared-images-tab">
+                <p class="shared-content-status" aria-live="polite">Chọn một cuộc trò chuyện để xem ảnh đã chia sẻ.</p>
+                <div id="shared-images-list" class="shared-images-list"></div>
+            </div>
+            <div id="shared-links-panel" class="conversation-info-panel hidden" role="tabpanel" aria-labelledby="shared-links-tab">
+                <p class="shared-content-status" aria-live="polite">Chọn một cuộc trò chuyện để xem liên kết đã chia sẻ.</p>
+                <div id="shared-links-list" class="shared-links-list"></div>
+            </div>
+            <div id="shared-members-panel" class="conversation-info-panel hidden" role="tabpanel" aria-labelledby="shared-members-tab">
+                <div id="shared-members-list" class="shared-members-list"></div>
+            </div>
+        </section>
+    </div>
+
     <div id="group-modal" class="modal-overlay hidden">
         <section class="tg-modal-card" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <h3 id="group-modal-title">Tạo nhóm chat mới</h3>
@@ -431,7 +558,7 @@
                 <button id="submit-group-btn" class="btn-telegram" type="button">Tạo nhóm</button>
             </div>
         </section>
-    </div>
-    <script src="app.js?v=20261108-auth-design2"></script>
+    </aside>
+    <script src="app.js?v=20261108-shared-player-fix-v20"></script>
 </body>
 </html>
