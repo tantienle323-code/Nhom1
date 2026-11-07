@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css?v=20261108-auth-design2">
+    <link rel="stylesheet" href="style.css?v=20261108-header-row-alignment-v5">
 </head>
 <body>
     <!-- Màn hình đăng nhập / đăng ký -->
@@ -54,24 +54,52 @@
 
     <!-- Giao diện chat -->
     <div id="chat-screen" class="tg-layout hidden">
-        <!-- CỘT TRÁI: SIDEBAR DANH SÁCH CHAT -->
-        <aside class="tg-sidebar">
-            <div class="tg-sidebar-brand">
-                <span class="tg-brand-mark" aria-hidden="true">✈</span>
-                <div>
-                    <h1>Chat Realtime</h1>
-                    <p>Không gian kết nối riêng tư</p>
+        <header class="tg-topbar">
+            <div class="tg-topbar-brand">
+                <div class="tg-sidebar-brand">
+                    <span class="tg-brand-mark" aria-hidden="true">✈</span>
+                    <div class="tg-brand-copy">
+                        <div class="tg-brand-title-row">
+                            <h1>Chat Realtime</h1>
+                            <span class="tg-brand-status" title="Ứng dụng hoạt động"><span></span> Trực tuyến</span>
+                        </div>
+                        <p>Không gian kết nối riêng tư</p>
+                    </div>
                 </div>
-                <span class="tg-brand-status" title="Ứng dụng hoạt động"><span></span> Trực tuyến</span>
+                <button id="my-profile-modal-btn" class="tg-menu-btn" type="button" title="Cài đặt cá nhân" aria-label="Cài đặt cá nhân">☰</button>
             </div>
-            <div class="tg-sidebar-header">
-                <button id="my-profile-modal-btn" class="tg-menu-btn" title="Cài đặt cá nhân">☰</button>
+            <div class="tg-topbar-search">
                 <div class="tg-search-wrapper">
-                <input type="text" placeholder="Lọc cuộc trò chuyện..." />
+                    <input type="text" placeholder="Lọc cuộc trò chuyện..." aria-label="Lọc cuộc trò chuyện" />
                 </div>
                 <button id="message-search-open-btn" class="tg-btn-icon tg-search-action" type="button" title="Tìm tin nhắn trong cuộc trò chuyện" aria-label="Tìm tin nhắn">⌕</button>
                 <button id="open-create-group-btn" class="tg-btn-icon" type="button" title="Tạo nhóm mới" aria-label="Tạo nhóm mới">＋</button>
             </div>
+
+            <div class="tg-chat-header">
+                <div class="tg-header-info">
+                    <button id="back-users-btn" class="tg-icon-btn back-users-btn" type="button" aria-label="Danh sách cuộc trò chuyện">←</button>
+                    <img id="header-avatar" src="https://via.placeholder.com/40" class="tg-avatar" alt="" />
+                    <div class="tg-chat-identity">
+                        <h4 id="header-name">Chọn cuộc trò chuyện</h4>
+                        <small id="header-status" class="tg-status">ngoại tuyến</small>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" title="Gọi video" disabled>📹 Gọi</button>
+                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Mở thế giới chung và thú cưng" title="Thú cưng chung" disabled>🐾 Thú cưng chung</button>
+                    <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" title="Đổi góc nhìn" disabled>🪞 Đổi góc nhìn</button>
+                    <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc" title="Nhạc">🎵 Nhạc</button>
+                    <a class="tg-admin-link tg-game-link" href="arcade.html" target="_blank" rel="noopener" aria-label="Chơi game" title="Chơi game">🎮 Chơi game</a>
+                    <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
+                    <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất" aria-label="Đăng xuất">🚪</button>
+                </div>
+            </div>
+        </header>
+
+        <div class="tg-workspace">
+        <!-- CỘT TRÁI: SIDEBAR DANH SÁCH CHAT -->
+        <aside class="tg-sidebar">
             <section id="pinned-chat-section" class="tg-chat-section tg-pinned-section hidden">
                 <h3 class="tg-chat-section-title">Đã ghim</h3>
                 <ul id="pinned-chats-list" class="tg-chat-list" aria-label="Cuộc trò chuyện đã ghim"></ul>
@@ -88,26 +116,6 @@
 
         <!-- CỘT PHẢI: KHUNG CHAT CHÍNH -->
         <main class="tg-chat-main">
-            <div class="tg-chat-header">
-                <div class="tg-header-info">
-                    <button id="back-users-btn" class="tg-icon-btn back-users-btn" type="button" aria-label="Danh sách cuộc trò chuyện">←</button>
-                    <img id="header-avatar" src="https://via.placeholder.com/40" class="tg-avatar" />
-                    <div>
-                        <h4 id="header-name">Chọn cuộc trò chuyện</h4>
-                        <small id="header-status" class="tg-status">ngoại tuyến</small>
-                    </div>
-                </div>
-                <div class="header-actions">
-                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" disabled>📹 Gọi</button>
-                    <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Mở thế giới chung và thú cưng" disabled>🐾 Thú cưng chung</button>
-                    <button id="perspective-open-btn" class="tg-perspective-button" type="button" aria-label="Mở hoạt động đổi góc nhìn" disabled>🪞 Đổi góc nhìn</button>
-                    <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
-                    <a class="tg-admin-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game</a>
-                    <a id="admin-link" class="tg-admin-link hidden" href="admin.html">Quản trị</a>
-                    <button id="logout-btn" class="tg-icon-btn" title="Đăng xuất">🚪</button>
-                </div>
-            </div>
-
             <div class="tg-messages-container" id="messages-container">
                 <section class="chat-welcome" aria-labelledby="chat-welcome-title">
                     <div class="welcome-visual" aria-hidden="true">
@@ -158,6 +166,7 @@
                 <button id="send-btn" class="tg-send-btn" type="button" aria-label="Gửi tin nhắn">✈️</button>
             </div>
         </main>
+        </div>
     </div>
 
     <div id="camera-modal" class="modal-overlay hidden">
