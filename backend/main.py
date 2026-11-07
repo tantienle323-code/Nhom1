@@ -1783,7 +1783,7 @@ UPLOAD_TYPES = {
     "image/jpeg": (".jpg", lambda data: data.startswith(b"\xff\xd8\xff")),
     "image/png": (".png", lambda data: data.startswith(b"\x89PNG\r\n\x1a\n")),
     "image/gif": (".gif", lambda data: data.startswith((b"GIF87a", b"GIF89a"))),
-    "image/webp": (
+    "image/webp":(
         ".webp",
         lambda data: len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP",
     ),
