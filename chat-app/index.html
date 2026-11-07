@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ứng dụng chat</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20261106-video-call">
 </head>
 <body>
     <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ (TELEGRAM STYLE) -->
@@ -61,6 +61,7 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <button id="video-call-btn" class="tg-call-button" type="button" aria-label="Bắt đầu cuộc gọi video" disabled>📹 Gọi</button>
                     <button id="world-open-btn" class="tg-world-button" type="button" aria-label="Thế giới của hai đứa" disabled>🌱 Thế giới đôi</button>
                     <button id="music-open-btn" class="tg-music-button" type="button" aria-label="Mở trình phát nhạc">🎵 Nhạc</button>
                     <a class="tg-admin-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game</a>
@@ -164,10 +165,12 @@
                 <input id="music-link-name" type="text" maxlength="100" placeholder="Tên gợi nhớ (không bắt buộc)">
                 <button class="music-add-button" type="submit">＋ Thêm vào danh sách</button>
             </form>
-            <p class="music-privacy-note">Trên YouTube, chọn <b>Chia sẻ → Sao chép đường liên kết</b> rồi dán vào đây. Video phát từ YouTube; danh sách link chỉ lưu trong trình duyệt của bạn, không gửi lên máy chủ chat. Một số video có thể không cho phép nhúng.</p>
+            <p class="music-privacy-note">Mỗi thiết bị tự tải video trực tiếp từ YouTube; ứng dụng chỉ đồng bộ link và trạng thái phát, không truyền hình ảnh. Cả hai cần có Internet và một số video không cho phép phát nhúng.</p>
 
             <div class="music-embed-wrap">
-                <iframe id="music-youtube-frame" class="hidden" title="Trình phát YouTube" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+                <div id="music-youtube-frame" class="hidden">
+                    <div id="music-youtube-player"></div>
+                </div>
                 <div id="music-embed-empty" class="music-embed-empty">🎵<span>Thêm link YouTube để bắt đầu nghe</span></div>
             </div>
             <div class="music-current-track">
@@ -183,10 +186,53 @@
                 <button id="music-stop-btn" type="button" aria-label="Dừng nhạc" disabled>⏹ Dừng nhạc</button>
                 <button id="music-next-btn" type="button" aria-label="Link tiếp theo" disabled>Link tiếp theo ⏭</button>
             </div>
+            <div class="music-share-controls">
+                <button id="music-share-btn" type="button" disabled>👥 Mời nghe/xem chung</button>
+                <button id="music-leave-share-btn" class="hidden" type="button">Ngừng nghe/xem chung</button>
+                <p id="music-share-status" role="status">Chọn một cuộc trò chuyện riêng và phát YouTube để mời đối phương.</p>
+            </div>
             <a class="music-game-link" href="arcade.html" target="_blank" rel="noopener">🎮 Chơi game ở tab mới — giữ nhạc tiếp tục phát</a>
             <div class="music-playlist-heading"><h3>Danh sách phát</h3><span id="music-track-count">0 bài</span></div>
             <ul id="music-playlist" class="music-playlist" aria-label="Danh sách phát"></ul>
             <p id="music-feedback" class="music-feedback" role="status"></p>
+        </section>
+    </div>
+
+    <aside id="music-invite-banner" class="music-invite-banner hidden" role="dialog" aria-labelledby="music-invite-title">
+        <div>
+            <strong id="music-invite-title">Lời mời nghe/xem chung</strong>
+            <p id="music-invite-description"></p>
+        </div>
+        <div class="music-invite-actions">
+            <button id="music-invite-accept" type="button">Tham gia</button>
+            <button id="music-invite-decline" type="button">Từ chối</button>
+        </div>
+    </aside>
+
+    <div id="call-overlay" class="call-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="call-title">
+        <section class="call-panel">
+            <header class="call-header">
+                <div>
+                    <p class="world-eyebrow">CUỘC GỌI VIDEO</p>
+                    <h2 id="call-title">Cuộc gọi</h2>
+                    <p id="call-status" role="status">Đang kết nối...</p>
+                </div>
+                <button id="call-close-btn" class="call-close-btn hidden" type="button" aria-label="Đóng cuộc gọi">×</button>
+            </header>
+            <div id="call-incoming" class="call-incoming hidden">
+                <p id="call-incoming-text"></p>
+                <div class="call-controls">
+                    <button id="call-accept-btn" class="call-accept-btn" type="button">📹 Tham gia</button>
+                    <button id="call-reject-btn" class="call-hangup-btn" type="button">Từ chối</button>
+                </div>
+            </div>
+            <div id="call-video-grid" class="call-video-grid"></div>
+            <div id="call-controls" class="call-controls hidden">
+                <button id="call-mic-btn" type="button" aria-pressed="true">🎙️ Tắt mic</button>
+                <button id="call-camera-btn" type="button" aria-pressed="true">📷 Tắt camera</button>
+                <button id="call-screen-btn" type="button" aria-pressed="false">🖥️ Chia sẻ màn hình</button>
+                <button id="call-hangup-btn" class="call-hangup-btn" type="button">📞 Kết thúc</button>
+            </div>
         </section>
     </div>
 
@@ -202,6 +248,6 @@
             </div>
         </section>
     </div>
-    <script src="app.js"></script>
+    <script src="app.js?v=20261106-video-call"></script>
 </body>
 </html>

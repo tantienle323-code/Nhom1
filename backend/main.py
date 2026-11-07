@@ -619,8 +619,90 @@ class ConnectionManager:
         async with self._lock:
             return list(self.rooms.get(room, {}))
 
+    async def send_to_user_in_room(self, room: str, username: str, message_data: dict) -> bool:
+        async with self._lock:
+            connections = list(self.rooms.get(room, {}).get(username, set()))
+        if not connections:
+            return False
+        sent = False
+        for connection in connections:
+            try:
+                await connection.send_json(message_data)
+                sent = True
+            except (WebSocketDisconnect, WebSocketDisconnected, RuntimeError):
+                await self.disconnect(room, username, connection)
+        return sent
+
 
 manager = ConnectionManager()
+MAX_CALL_PARTICIPANTS = 4
+
+
+class WebRTCCallManager:
+    def __init__(self):
+        self.sessions: dict[tuple[str, str], dict] = {}
+        self._lock = asyncio.Lock()
+
+    async def start(self, room: str, call_id: str, initiator: str) -> bool:
+        async with self._lock:
+            key = (room, call_id)
+            if key in self.sessions:
+                return False
+            self.sessions[key] = {"initiator": initiator, "participants": {initiator}}
+            return True
+
+    async def exists(self, room: str, call_id: str) -> bool:
+        async with self._lock:
+            return (room, call_id) in self.sessions
+
+    async def join(self, room: str, call_id: str, username: str) -> tuple[bool, list[str]]:
+        async with self._lock:
+            session = self.sessions.get((room, call_id))
+            if not session:
+                return False, []
+            participants = session["participants"]
+            if username not in participants and len(participants) >= MAX_CALL_PARTICIPANTS:
+                return False, sorted(participants)
+            participants.add(username)
+            return True, sorted(participants)
+
+    async def can_signal(self, room: str, call_id: str, sender: str, target: str) -> bool:
+        async with self._lock:
+            session = self.sessions.get((room, call_id))
+            return bool(
+                session
+                and sender in session["participants"]
+                and target in session["participants"]
+                and sender != target
+            )
+
+    async def leave(self, room: str, call_id: str, username: str) -> tuple[bool, list[str]]:
+        async with self._lock:
+            key = (room, call_id)
+            session = self.sessions.get(key)
+            if not session or username not in session["participants"]:
+                return False, []
+            session["participants"].remove(username)
+            participants = sorted(session["participants"])
+            if not participants:
+                del self.sessions[key]
+            return True, participants
+
+    async def disconnect(self, room: str, username: str) -> list[tuple[str, list[str]]]:
+        updates = []
+        async with self._lock:
+            for key, session in list(self.sessions.items()):
+                if key[0] != room or username not in session["participants"]:
+                    continue
+                session["participants"].remove(username)
+                participants = sorted(session["participants"])
+                updates.append((key[1], participants))
+                if not participants:
+                    del self.sessions[key]
+        return updates
+
+
+call_manager = WebRTCCallManager()
 
 
 class TetrisMatchManager:
@@ -1396,6 +1478,179 @@ async def websocket_endpoint(
                 result = await message_collection.insert_one(message)
                 message["_id"] = str(result.inserted_id)
                 await manager.broadcast_to_room(room, message)
+            elif msg_type == "call_signal":
+                action = data.get("action")
+                call_id = data.get("call_id")
+                if (
+                    not isinstance(action, str)
+                    or action not in {
+                        "invite", "join", "reject", "leave",
+                        "offer", "answer", "ice",
+                    }
+                    or not isinstance(call_id, str)
+                    or len(call_id) > 36
+                ):
+                    await send_socket_error(websocket, "Dữ liệu cuộc gọi không hợp lệ.")
+                    continue
+                try:
+                    call_id = str(uuid.UUID(call_id))
+                except ValueError:
+                    await send_socket_error(websocket, "Mã cuộc gọi không hợp lệ.")
+                    continue
+
+                if action == "invite":
+                    if not await call_manager.start(room, call_id, username):
+                        await send_socket_error(websocket, "Cuộc gọi này đã được tạo.")
+                        continue
+                    await manager.broadcast_to_room(room, {
+                        "type": "call_signal",
+                        "action": "invite",
+                        "call_id": call_id,
+                        "sender": username,
+                    })
+                elif action == "join":
+                    joined, participants = await call_manager.join(room, call_id, username)
+                    if not joined:
+                        message = (
+                            f"Cuộc gọi nhóm đã đủ {MAX_CALL_PARTICIPANTS} người."
+                            if participants else "Cuộc gọi không còn hoạt động."
+                        )
+                        await send_socket_error(websocket, message)
+                        continue
+                    await manager.broadcast_to_room(room, {
+                        "type": "call_signal",
+                        "action": "join",
+                        "call_id": call_id,
+                        "sender": username,
+                    })
+                elif action == "reject":
+                    if not await call_manager.exists(room, call_id):
+                        continue
+                    await manager.broadcast_to_room(room, {
+                        "type": "call_signal",
+                        "action": "reject",
+                        "call_id": call_id,
+                        "sender": username,
+                    })
+                elif action == "leave":
+                    left, _ = await call_manager.leave(room, call_id, username)
+                    if left:
+                        await manager.broadcast_to_room(room, {
+                            "type": "call_signal",
+                            "action": "peer_left",
+                            "call_id": call_id,
+                            "sender": username,
+                        })
+                elif action in {"offer", "answer", "ice"}:
+                    target = data.get("target")
+                    if not isinstance(target, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{3,30}", target):
+                        await send_socket_error(websocket, "Người nhận tín hiệu cuộc gọi không hợp lệ.")
+                        continue
+                    if not await call_manager.can_signal(room, call_id, username, target):
+                        await send_socket_error(websocket, "Người tham gia không thuộc cuộc gọi này.")
+                        continue
+                    event = {
+                        "type": "call_signal",
+                        "action": action,
+                        "call_id": call_id,
+                        "sender": username,
+                        "target": target,
+                    }
+                    if action in {"offer", "answer"}:
+                        description = data.get("description")
+                        if (
+                            not isinstance(description, dict)
+                            or description.get("type") != action
+                            or not isinstance(description.get("sdp"), str)
+                            or len(description["sdp"]) > 100_000
+                        ):
+                            await send_socket_error(websocket, "Mô tả kết nối cuộc gọi không hợp lệ.")
+                            continue
+                        event["description"] = {
+                            "type": action,
+                            "sdp": description["sdp"],
+                        }
+                    else:
+                        candidate = data.get("candidate")
+                        if (
+                            not isinstance(candidate, dict)
+                            or not isinstance(candidate.get("candidate"), str)
+                            or len(candidate["candidate"]) > 4096
+                            or (
+                                candidate.get("sdpMid") is not None
+                                and (
+                                    not isinstance(candidate["sdpMid"], str)
+                                    or len(candidate["sdpMid"]) > 256
+                                )
+                            )
+                            or (
+                                candidate.get("sdpMLineIndex") is not None
+                                and (
+                                    isinstance(candidate["sdpMLineIndex"], bool)
+                                    or not isinstance(candidate["sdpMLineIndex"], int)
+                                    or not 0 <= candidate["sdpMLineIndex"] <= 255
+                                )
+                            )
+                        ):
+                            await send_socket_error(websocket, "Tín hiệu mạng cuộc gọi không hợp lệ.")
+                            continue
+                        event["candidate"] = {
+                            "candidate": candidate["candidate"],
+                            "sdpMid": candidate.get("sdpMid"),
+                            "sdpMLineIndex": candidate.get("sdpMLineIndex"),
+                        }
+                    if not await manager.send_to_user_in_room(room, target, event):
+                        await send_socket_error(websocket, "Người tham gia đã ngắt kết nối.")
+            elif msg_type == "music_sync":
+                if room.startswith("group_"):
+                    await send_socket_error(websocket, "Nghe/xem chung hiện chỉ hỗ trợ cuộc trò chuyện riêng.")
+                    continue
+                action = data.get("action")
+                if not isinstance(action, str) or action not in {"invite", "join", "decline", "state", "leave"}:
+                    await send_socket_error(websocket, "Thao tác nghe/xem chung không hợp lệ.")
+                    continue
+                event = {"type": "music_sync", "action": action, "sender": username}
+                if action in {"invite", "state"}:
+                    video_id = data.get("video_id")
+                    playlist_id = data.get("playlist_id")
+                    title = data.get("title", "")
+                    position = data.get("position", 0)
+                    playback_state = data.get("playback_state")
+                    valid_video_id = isinstance(video_id, str) and re.fullmatch(
+                        r"[A-Za-z0-9_-]{11}", video_id
+                    )
+                    valid_playlist_id = isinstance(playlist_id, str) and re.fullmatch(
+                        r"[A-Za-z0-9_-]{10,100}", playlist_id
+                    )
+                    if (
+                        not valid_video_id and not valid_playlist_id
+                    ) or (
+                        video_id not in (None, "") and not valid_video_id
+                    ) or (
+                        playlist_id not in (None, "") and not valid_playlist_id
+                    ):
+                        await send_socket_error(websocket, "Video hoặc playlist YouTube không hợp lệ.")
+                        continue
+                    if not isinstance(title, str) or len(title) > 100:
+                        await send_socket_error(websocket, "Tên nội dung nghe/xem chung không hợp lệ.")
+                        continue
+                    if (
+                        isinstance(position, bool)
+                        or not isinstance(position, (int, float))
+                        or not 0 <= position <= 86400
+                        or not isinstance(playback_state, str)
+                        or playback_state not in {"playing", "paused", "ended"}
+                    ):
+                        await send_socket_error(websocket, "Trạng thái phát nội dung không hợp lệ.")
+                        continue
+                    event.update({
+                        "video_id": video_id if valid_video_id else "",
+                        "playlist_id": playlist_id if valid_playlist_id else "",
+                        "title": title,
+                        "position": position,
+                        "playback_state": playback_state,
+                    })
+                await manager.broadcast_to_room(room, event)
             elif msg_type in {"edit_message", "delete_message"}:
                 message_id = data.get("message_id")
                 if not isinstance(message_id, str) or not ObjectId.is_valid(message_id):
@@ -1429,6 +1684,16 @@ async def websocket_endpoint(
             pass
     finally:
         if await manager.disconnect(room, username, websocket):
+            for call_id, _ in await call_manager.disconnect(room, username):
+                try:
+                    await manager.broadcast_to_room(room, {
+                        "type": "call_signal",
+                        "action": "peer_left",
+                        "call_id": call_id,
+                        "sender": username,
+                    })
+                except (RuntimeError, WebSocketDisconnect, WebSocketDisconnected):
+                    logger.debug("Could not broadcast a call update for %s.", username)
             try:
                 await manager.broadcast_to_room(
                     room, {"type": "presence", "username": username, "online": False}
