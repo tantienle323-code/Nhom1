@@ -1,5 +1,5 @@
 const TOKEN_KEY = "chat_access_token";
-const API_BASE = window.CHAT_API_URL || `${location.protocol === "https:" ? "https" : "http"}://${location.hostname || "127.0.0.1"}:8000`;
+const API_BASE = window.CHAT_API_URL || location.origin;
 const token = localStorage.getItem(TOKEN_KEY);
 const status = document.getElementById("arcade-status");
 
